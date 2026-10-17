@@ -1,0 +1,45 @@
+services:
+  - type: web
+    name: smachnogo-api
+    runtime: node
+    plan: starter
+    region: frankfurt
+    buildCommand: npm ci --include=dev && npm run build
+    preDeployCommand: npx prisma migrate deploy
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: APP_URL
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: VOUCHER_HMAC_SECRET
+        generateValue: true
+      - key: DATA_ENCRYPTION_KEY
+        sync: false
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: COOKIE_SECURE
+        value: 'true'
+      - key: PAYMENT_PROVIDER
+        value: liqpay
+      - key: RUN_JOBS_IN_PROCESS
+        value: 'true'
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: MAIL_FROM
+        sync: false

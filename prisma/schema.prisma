@@ -1,0 +1,882 @@
+
+generator client {
+  provider               = "prisma-client"
+  output                 = "../src/generated/prisma"
+  runtime                = "nodejs"
+  moduleFormat           = "esm"
+  importFileExtension    = "js"
+  generatedFileExtension = "ts"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+
+enum UserRole {
+  customer
+  admin
+  super_admin
+}
+
+enum UserStatus {
+  active
+  blocked
+  deleted
+}
+
+model User {
+  id              BigInt     @id @default(autoincrement()) @db.UnsignedBigInt
+  email           String     @unique @db.VarChar(255)
+  emailVerifiedAt DateTime?  @map("email_verified_at") @db.DateTime(3)
+  passwordHash    String?    @map("password_hash") @db.VarChar(255)
+  firstName       String     @map("first_name") @db.VarChar(100)
+  lastName        String?    @map("last_name") @db.VarChar(100)
+  phone           String?    @db.VarChar(20)
+  avatarUrl       String?    @map("avatar_url") @db.VarChar(500)
+  role            UserRole   @default(customer)
+  status          UserStatus @default(active)
+  homeLat         Decimal?   @map("home_lat") @db.Decimal(9, 6)
+  homeLng         Decimal?   @map("home_lng") @db.Decimal(9, 6)
+  homeAddress     String?    @map("home_address") @db.VarChar(255)
+  searchRadiusKm  Int        @default(5) @map("search_radius_km") @db.UnsignedTinyInt
+  cityId          BigInt?    @map("city_id") @db.UnsignedBigInt
+  lastLoginAt     DateTime?  @map("last_login_at") @db.DateTime(3)
+  createdAt       DateTime   @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt       DateTime   @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt       DateTime?  @map("deleted_at") @db.DateTime(3)
+
+  city                 City?                 @relation(fields: [cityId], references: [id])
+  oauthAccounts        OauthAccount[]
+  refreshTokens        RefreshToken[]
+  authTokens           AuthToken[]
+  venueMemberships     VenueMember[]         @relation("VenueMemberUser")
+  invitedMembers       VenueMember[]         @relation("VenueMemberInvitedBy")
+  partnerApplications  PartnerApplication[]  @relation("ApplicationApplicant")
+  reviewedApplications PartnerApplication[]  @relation("ApplicationReviewer")
+  orders               Order[]               @relation("OrderCustomer")
+  pickedUpOrders       Order[]               @relation("OrderPickedUpBy")
+  favorites            Favorite[]
+  reviews              Review[]
+  interactions         Interaction[]
+  stats                UserStats?
+  achievements         UserAchievement[]
+  preferences          UserPreferences?
+  notificationSettings NotificationSettings?
+  pushSubscriptions    PushSubscription[]
+  notifications        Notification[]
+  settingsUpdated      Setting[]
+  auditEntries         AuditLog[]
+
+  @@index([cityId])
+  @@map("users")
+}
+
+enum OauthProvider {
+  google
+}
+
+model OauthAccount {
+  id             BigInt        @id @default(autoincrement()) @db.UnsignedBigInt
+  userId         BigInt        @map("user_id") @db.UnsignedBigInt
+  provider       OauthProvider
+  providerUserId String        @map("provider_user_id") @db.VarChar(255)
+  createdAt      DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
+  @@map("oauth_accounts")
+}
+
+model RefreshToken {
+  id        BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  userId    BigInt    @map("user_id") @db.UnsignedBigInt
+  tokenHash String    @unique @map("token_hash") @db.Char(64)
+  familyId  String    @map("family_id") @db.Char(26)
+  userAgent String?   @map("user_agent") @db.VarChar(255)
+  ip        Bytes?    @db.VarBinary(16)
+  expiresAt DateTime  @map("expires_at") @db.DateTime(3)
+  revokedAt DateTime? @map("revoked_at") @db.DateTime(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("refresh_tokens")
+}
+
+enum AuthTokenType {
+  email_verify
+  password_reset
+  staff_invite
+}
+
+model AuthToken {
+  id        BigInt        @id @default(autoincrement()) @db.UnsignedBigInt
+  userId    BigInt        @map("user_id") @db.UnsignedBigInt
+  type      AuthTokenType
+  tokenHash String        @unique @map("token_hash") @db.Char(64)
+  payload   Json?
+  expiresAt DateTime      @map("expires_at") @db.DateTime(3)
+  usedAt    DateTime?     @map("used_at") @db.DateTime(3)
+  createdAt DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@map("auth_tokens")
+}
+
+
+model City {
+  id        BigInt  @id @default(autoincrement()) @db.UnsignedBigInt
+  name      String  @db.VarChar(100)
+  slug      String  @unique @db.VarChar(100)
+  centerLat Decimal @map("center_lat") @db.Decimal(9, 6)
+  centerLng Decimal @map("center_lng") @db.Decimal(9, 6)
+  isActive  Boolean @default(true) @map("is_active")
+
+  users  User[]
+  venues Venue[]
+
+  @@map("cities")
+}
+
+model Category {
+  id        BigInt  @id @default(autoincrement()) @db.UnsignedBigInt
+  name      String  @db.VarChar(100)
+  slug      String  @unique @db.VarChar(100)
+  icon      String? @db.VarChar(50)
+  sortOrder Int     @default(0) @map("sort_order") @db.SmallInt
+  isActive  Boolean @default(true) @map("is_active")
+
+  venues Venue[]
+  offers Offer[]
+
+  @@map("categories")
+}
+
+model Tag {
+  id   BigInt @id @default(autoincrement()) @db.UnsignedBigInt
+  name String @db.VarChar(100)
+  slug String @unique @db.VarChar(100)
+
+  offers OfferTag[]
+
+  @@map("tags")
+}
+
+model Allergen {
+  id   BigInt @id @default(autoincrement()) @db.UnsignedBigInt
+  name String @db.VarChar(100)
+  slug String @unique @db.VarChar(100)
+
+  offers OfferAllergen[]
+
+  @@map("allergens")
+}
+
+model Level {
+  id            BigInt @id @default(autoincrement()) @db.UnsignedBigInt
+  name          String @db.VarChar(100)
+  minSavedCount Int    @map("min_saved_count")
+  sortOrder     Int    @default(0) @map("sort_order") @db.SmallInt
+
+  userStats UserStats[]
+
+  @@map("levels")
+}
+
+model Achievement {
+  id          BigInt  @id @default(autoincrement()) @db.UnsignedBigInt
+  code        String  @unique @db.VarChar(50)
+  name        String  @db.VarChar(100)
+  description String  @db.VarChar(255)
+  icon        String? @db.VarChar(50)
+  rule        Json
+  isActive    Boolean @default(true) @map("is_active")
+
+  users UserAchievement[]
+
+  @@map("achievements")
+}
+
+model Setting {
+  key       String   @id @db.VarChar(100)
+  value     Json
+  updatedBy BigInt?  @map("updated_by") @db.UnsignedBigInt
+  updatedAt DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  updatedByUser User? @relation(fields: [updatedBy], references: [id])
+
+  @@map("settings")
+}
+
+
+enum ApplicationStatus {
+  submitted
+  approved
+  rejected
+}
+
+model PartnerApplication {
+  id           BigInt            @id @default(autoincrement()) @db.UnsignedBigInt
+  userId       BigInt            @map("user_id") @db.UnsignedBigInt
+  businessName String            @map("business_name") @db.VarChar(255)
+  venueType    String            @map("venue_type") @db.VarChar(50)
+  contactName  String            @map("contact_name") @db.VarChar(255)
+  contactPhone String            @map("contact_phone") @db.VarChar(20)
+  contactEmail String            @map("contact_email") @db.VarChar(255)
+  address      String            @db.VarChar(255)
+  legalName    String            @map("legal_name") @db.VarChar(255)
+  taxId        String            @map("tax_id") @db.VarChar(255)
+  iban         String            @db.VarChar(255)
+  venuesCount  Int               @default(1) @map("venues_count") @db.UnsignedSmallInt
+  status       ApplicationStatus @default(submitted)
+  reviewedBy   BigInt?           @map("reviewed_by") @db.UnsignedBigInt
+  rejectReason String?           @map("reject_reason") @db.VarChar(500)
+  createdAt    DateTime          @default(now()) @map("created_at") @db.DateTime(3)
+  reviewedAt   DateTime?         @map("reviewed_at") @db.DateTime(3)
+
+  user     User    @relation("ApplicationApplicant", fields: [userId], references: [id])
+  reviewer User?   @relation("ApplicationReviewer", fields: [reviewedBy], references: [id])
+  venues   Venue[]
+
+  @@index([userId])
+  @@index([status])
+  @@map("partner_applications")
+}
+
+enum VenueStatus {
+  draft
+  active
+  paused
+  blocked
+}
+
+model Venue {
+  id             BigInt      @id @default(autoincrement()) @db.UnsignedBigInt
+  slug           String      @unique @db.VarChar(120)
+  name           String      @db.VarChar(255)
+  description    String?     @db.Text
+  categoryId     BigInt      @map("category_id") @db.UnsignedBigInt
+  cityId         BigInt      @map("city_id") @db.UnsignedBigInt
+  address        String      @db.VarChar(255)
+  lat            Decimal     @db.Decimal(9, 6)
+  lng            Decimal     @db.Decimal(9, 6)
+  phone          String?     @db.VarChar(20)
+  logoUrl        String?     @map("logo_url") @db.VarChar(500)
+  coverUrl       String?     @map("cover_url") @db.VarChar(500)
+  legalName      String      @map("legal_name") @db.VarChar(255)
+  taxId          String      @map("tax_id") @db.VarChar(255)
+  iban           String      @db.VarChar(255)
+  commissionRate Decimal     @default(0.1500) @map("commission_rate") @db.Decimal(5, 4)
+  ratingAvg      Decimal?    @map("rating_avg") @db.Decimal(3, 2)
+  ratingCount    Int         @default(0) @map("rating_count") @db.UnsignedInt
+  status         VenueStatus @default(draft)
+  applicationId  BigInt?     @map("application_id") @db.UnsignedBigInt
+  createdAt      DateTime    @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt      DateTime    @updatedAt @map("updated_at") @db.DateTime(3)
+  deletedAt      DateTime?   @map("deleted_at") @db.DateTime(3)
+
+  category     Category            @relation(fields: [categoryId], references: [id])
+  city         City                @relation(fields: [cityId], references: [id])
+  application  PartnerApplication? @relation(fields: [applicationId], references: [id])
+  members      VenueMember[]
+  hours        VenueHours[]
+  closures     VenueClosure[]
+  photos       VenuePhoto[]
+  offers       Offer[]
+  listings     OfferListing[]
+  orders       Order[]
+  favorites    Favorite[]
+  reviews      Review[]
+  interactions Interaction[]
+  settlements  Settlement[]
+
+  @@index([cityId, status])
+  @@index([categoryId])
+  @@index([lat, lng])
+  @@map("venues")
+}
+
+enum VenueMemberRole {
+  owner
+  staff
+}
+
+enum VenueMemberStatus {
+  invited
+  active
+  disabled
+}
+
+model VenueMember {
+  venueId   BigInt            @map("venue_id") @db.UnsignedBigInt
+  userId    BigInt            @map("user_id") @db.UnsignedBigInt
+  role      VenueMemberRole
+  status    VenueMemberStatus @default(active)
+  invitedBy BigInt?           @map("invited_by") @db.UnsignedBigInt
+  createdAt DateTime          @default(now()) @map("created_at") @db.DateTime(3)
+
+  venue         Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  user          User  @relation("VenueMemberUser", fields: [userId], references: [id], onDelete: Cascade)
+  invitedByUser User? @relation("VenueMemberInvitedBy", fields: [invitedBy], references: [id])
+
+  @@id([venueId, userId])
+  @@index([userId])
+  @@map("venue_members")
+}
+
+model VenueHours {
+  id       BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  venueId  BigInt   @map("venue_id") @db.UnsignedBigInt
+  weekday  Int      @db.TinyInt
+  opensAt  DateTime @map("opens_at") @db.Time(0)
+  closesAt DateTime @map("closes_at") @db.Time(0)
+  isClosed Boolean  @default(false) @map("is_closed")
+
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  @@unique([venueId, weekday])
+  @@map("venue_hours")
+}
+
+model VenueClosure {
+  id      BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  venueId BigInt   @map("venue_id") @db.UnsignedBigInt
+  date    DateTime @db.Date
+  reason  String?  @db.VarChar(255)
+
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  @@unique([venueId, date])
+  @@map("venue_closures")
+}
+
+model VenuePhoto {
+  id        BigInt @id @default(autoincrement()) @db.UnsignedBigInt
+  venueId   BigInt @map("venue_id") @db.UnsignedBigInt
+  url       String @db.VarChar(500)
+  sortOrder Int    @default(0) @map("sort_order") @db.SmallInt
+
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  @@index([venueId])
+  @@map("venue_photos")
+}
+
+
+enum OfferStatus {
+  active
+  paused
+  archived
+}
+
+model Offer {
+  id            BigInt      @id @default(autoincrement()) @db.UnsignedBigInt
+  venueId       BigInt      @map("venue_id") @db.UnsignedBigInt
+  title         String      @db.VarChar(120)
+  description   String?     @db.Text
+  categoryId    BigInt      @map("category_id") @db.UnsignedBigInt
+  photoUrl      String?     @map("photo_url") @db.VarChar(500)
+  originalPrice Decimal     @map("original_price") @db.Decimal(10, 2)
+  price         Decimal     @db.Decimal(10, 2)
+  estWeightKg   Decimal     @default(0.50) @map("est_weight_kg") @db.Decimal(5, 2)
+  maxPerOrder   Int         @default(2) @map("max_per_order") @db.UnsignedTinyInt
+  status        OfferStatus @default(active)
+  createdAt     DateTime    @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt     DateTime    @updatedAt @map("updated_at") @db.DateTime(3)
+
+  venue        Venue           @relation(fields: [venueId], references: [id])
+  category     Category        @relation(fields: [categoryId], references: [id])
+  tags         OfferTag[]
+  allergens    OfferAllergen[]
+  schedules    OfferSchedule[]
+  listings     OfferListing[]
+  interactions Interaction[]
+
+  @@index([venueId, status])
+  @@index([categoryId])
+  @@map("offers")
+}
+
+model OfferTag {
+  offerId BigInt @map("offer_id") @db.UnsignedBigInt
+  tagId   BigInt @map("tag_id") @db.UnsignedBigInt
+
+  offer Offer @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  tag   Tag   @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([offerId, tagId])
+  @@index([tagId])
+  @@map("offer_tags")
+}
+
+model OfferAllergen {
+  offerId    BigInt @map("offer_id") @db.UnsignedBigInt
+  allergenId BigInt @map("allergen_id") @db.UnsignedBigInt
+
+  offer    Offer    @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  allergen Allergen @relation(fields: [allergenId], references: [id], onDelete: Cascade)
+
+  @@id([offerId, allergenId])
+  @@index([allergenId])
+  @@map("offer_allergens")
+}
+
+model OfferSchedule {
+  id          BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  offerId     BigInt   @map("offer_id") @db.UnsignedBigInt
+  weekday     Int      @db.TinyInt
+  pickupStart DateTime @map("pickup_start") @db.Time(0)
+  pickupEnd   DateTime @map("pickup_end") @db.Time(0)
+  quantity    Int      @db.UnsignedSmallInt
+  isActive    Boolean  @default(true) @map("is_active")
+
+  offer Offer @relation(fields: [offerId], references: [id], onDelete: Cascade)
+
+  @@unique([offerId, weekday])
+  @@map("offer_schedules")
+}
+
+enum ListingStatus {
+  scheduled
+  on_sale
+  sold_out
+  closed
+  cancelled
+}
+
+enum ListingSource {
+  schedule
+  manual
+}
+
+model OfferListing {
+  id            BigInt        @id @default(autoincrement()) @db.UnsignedBigInt
+  offerId       BigInt        @map("offer_id") @db.UnsignedBigInt
+  venueId       BigInt        @map("venue_id") @db.UnsignedBigInt
+  pickupDate    DateTime      @map("pickup_date") @db.Date
+  pickupStart   DateTime      @map("pickup_start") @db.DateTime(3)
+  pickupEnd     DateTime      @map("pickup_end") @db.DateTime(3)
+  price         Decimal       @db.Decimal(10, 2)
+  originalPrice Decimal       @map("original_price") @db.Decimal(10, 2)
+  quantityTotal Int           @map("quantity_total") @db.UnsignedSmallInt
+  quantityLeft  Int           @map("quantity_left") @db.UnsignedSmallInt
+  status        ListingStatus
+  source        ListingSource
+  cancelReason  String?       @map("cancel_reason") @db.VarChar(255)
+  createdAt     DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.DateTime(3)
+
+  offer  Offer   @relation(fields: [offerId], references: [id])
+  venue  Venue   @relation(fields: [venueId], references: [id])
+  orders Order[]
+
+  @@unique([offerId, pickupDate, pickupStart])
+  @@index([status, pickupEnd])
+  @@index([venueId, pickupDate])
+  @@map("offer_listings")
+}
+
+
+enum OrderStatus {
+  pending_payment
+  paid
+  picked_up
+  cancelled_by_customer
+  cancelled_by_venue
+  expired
+  no_show
+  refunded
+}
+
+enum VoucherStatus {
+  active
+  used
+  expired
+}
+
+enum OrderSource {
+  search
+  map
+  recommendation
+  favorite
+  direct
+}
+
+model Order {
+  id                BigInt         @id @default(autoincrement()) @db.UnsignedBigInt
+  publicId          String         @unique @map("public_id") @db.Char(26)
+  userId            BigInt         @map("user_id") @db.UnsignedBigInt
+  listingId         BigInt         @map("listing_id") @db.UnsignedBigInt
+  venueId           BigInt         @map("venue_id") @db.UnsignedBigInt
+  quantity          Int            @db.UnsignedTinyInt
+  unitPrice         Decimal        @map("unit_price") @db.Decimal(10, 2)
+  unitOriginalPrice Decimal        @map("unit_original_price") @db.Decimal(10, 2)
+  totalAmount       Decimal        @map("total_amount") @db.Decimal(10, 2)
+  savingAmount      Decimal        @map("saving_amount") @db.Decimal(10, 2)
+  commissionAmount  Decimal        @map("commission_amount") @db.Decimal(10, 2)
+  status            OrderStatus
+  reservedUntil     DateTime       @map("reserved_until") @db.DateTime(3)
+  pickupDate        DateTime       @map("pickup_date") @db.Date
+  pickupStart       DateTime       @map("pickup_start") @db.DateTime(3)
+  pickupEnd         DateTime       @map("pickup_end") @db.DateTime(3)
+  voucherCode       String?        @map("voucher_code") @db.Char(6)
+  voucherTokenHash  String?        @unique @map("voucher_token_hash") @db.Char(64)
+  voucherStatus     VoucherStatus? @map("voucher_status")
+  voucherValidUntil DateTime?      @map("voucher_valid_until") @db.DateTime(3)
+  pickedUpAt        DateTime?      @map("picked_up_at") @db.DateTime(3)
+  pickedUpBy        BigInt?        @map("picked_up_by") @db.UnsignedBigInt
+  cancelReason      String?        @map("cancel_reason") @db.VarChar(255)
+  source            OrderSource?
+  idempotencyKey    String?        @map("idempotency_key") @db.VarChar(64)
+  createdAt         DateTime       @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt         DateTime       @updatedAt @map("updated_at") @db.DateTime(3)
+
+  user            User                 @relation("OrderCustomer", fields: [userId], references: [id])
+  listing         OfferListing         @relation(fields: [listingId], references: [id])
+  venue           Venue                @relation(fields: [venueId], references: [id])
+  pickedUpByUser  User?                @relation("OrderPickedUpBy", fields: [pickedUpBy], references: [id])
+  statusHistory   OrderStatusHistory[]
+  payments        Payment[]
+  review          Review?
+  settlementItems SettlementItem[]
+
+  @@unique([venueId, pickupDate, voucherCode])
+  @@unique([userId, idempotencyKey])
+  @@index([userId, status])
+  @@index([venueId, pickupDate, status])
+  @@index([status, reservedUntil])
+  @@index([listingId])
+  @@map("orders")
+}
+
+enum ActorType {
+  customer
+  venue
+  admin
+  system
+  payment_provider
+}
+
+model OrderStatusHistory {
+  id         BigInt       @id @default(autoincrement()) @db.UnsignedBigInt
+  orderId    BigInt       @map("order_id") @db.UnsignedBigInt
+  fromStatus OrderStatus? @map("from_status")
+  toStatus   OrderStatus  @map("to_status")
+  actorType  ActorType    @map("actor_type")
+  actorId    BigInt?      @map("actor_id") @db.UnsignedBigInt
+  note       String?      @db.VarChar(255)
+  createdAt  DateTime     @default(now()) @map("created_at") @db.DateTime(3)
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("order_status_history")
+}
+
+enum PaymentProvider {
+  liqpay
+  fake
+}
+
+enum PaymentStatus {
+  created
+  processing
+  success
+  failure
+  reversed
+}
+
+model Payment {
+  id                BigInt          @id @default(autoincrement()) @db.UnsignedBigInt
+  orderId           BigInt          @map("order_id") @db.UnsignedBigInt
+  provider          PaymentProvider
+  providerOrderId   String          @unique @map("provider_order_id") @db.VarChar(64)
+  providerPaymentId String?         @unique @map("provider_payment_id") @db.VarChar(64)
+  amount            Decimal         @db.Decimal(10, 2)
+  method            String?         @db.VarChar(30)
+  status            PaymentStatus   @default(created)
+  rawCallback       Json?           @map("raw_callback")
+  paidAt            DateTime?       @map("paid_at") @db.DateTime(3)
+  createdAt         DateTime        @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt         DateTime        @updatedAt @map("updated_at") @db.DateTime(3)
+
+  order   Order    @relation(fields: [orderId], references: [id])
+  refunds Refund[]
+
+  @@index([orderId])
+  @@map("payments")
+}
+
+enum RefundInitiator {
+  customer
+  venue
+  admin
+  system
+}
+
+enum RefundStatus {
+  pending
+  success
+  failure
+}
+
+model Refund {
+  id               BigInt          @id @default(autoincrement()) @db.UnsignedBigInt
+  paymentId        BigInt          @map("payment_id") @db.UnsignedBigInt
+  amount           Decimal         @db.Decimal(10, 2)
+  reason           String          @db.VarChar(255)
+  initiatedBy      RefundInitiator @map("initiated_by")
+  initiatorId      BigInt?         @map("initiator_id") @db.UnsignedBigInt
+  status           RefundStatus    @default(pending)
+  providerResponse Json?           @map("provider_response")
+  createdAt        DateTime        @default(now()) @map("created_at") @db.DateTime(3)
+  completedAt      DateTime?       @map("completed_at") @db.DateTime(3)
+
+  payment Payment @relation(fields: [paymentId], references: [id])
+
+  @@index([paymentId])
+  @@map("refunds")
+}
+
+model PaymentWebhookLog {
+  id             BigInt          @id @default(autoincrement()) @db.UnsignedBigInt
+  provider       PaymentProvider
+  signatureValid Boolean         @map("signature_valid")
+  payload        Json
+  processed      Boolean         @default(false)
+  error          String?         @db.VarChar(500)
+  createdAt      DateTime        @default(now()) @map("created_at") @db.DateTime(3)
+
+  @@index([createdAt])
+  @@map("payment_webhook_log")
+}
+
+
+model Favorite {
+  userId            BigInt   @map("user_id") @db.UnsignedBigInt
+  venueId           BigInt   @map("venue_id") @db.UnsignedBigInt
+  notifyNewListings Boolean  @default(true) @map("notify_new_listings")
+  createdAt         DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  @@id([userId, venueId])
+  @@index([venueId])
+  @@map("favorites")
+}
+
+model Review {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  orderId   BigInt   @unique @map("order_id") @db.UnsignedBigInt
+  userId    BigInt   @map("user_id") @db.UnsignedBigInt
+  venueId   BigInt   @map("venue_id") @db.UnsignedBigInt
+  rating    Int      @db.TinyInt
+  comment   String?  @db.VarChar(500)
+  isHidden  Boolean  @default(false) @map("is_hidden")
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  order Order @relation(fields: [orderId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+  venue Venue @relation(fields: [venueId], references: [id])
+
+  @@index([venueId, createdAt])
+  @@index([userId])
+  @@map("reviews")
+}
+
+enum InteractionType {
+  impression
+  view
+  favorite
+  reserve
+  purchase
+  pickup
+  review
+}
+
+enum InteractionSource {
+  home
+  search
+  map
+  recommendation
+  venue
+  favorite
+  direct
+}
+
+model Interaction {
+  id        BigInt             @id @default(autoincrement()) @db.UnsignedBigInt
+  userId    BigInt?            @map("user_id") @db.UnsignedBigInt
+  anonId    String?            @map("anon_id") @db.Char(26)
+  offerId   BigInt             @map("offer_id") @db.UnsignedBigInt
+  venueId   BigInt             @map("venue_id") @db.UnsignedBigInt
+  type      InteractionType
+  source    InteractionSource?
+  position  Int?               @db.SmallInt
+  createdAt DateTime           @default(now()) @map("created_at") @db.DateTime(3)
+
+  user  User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  offer Offer @relation(fields: [offerId], references: [id])
+  venue Venue @relation(fields: [venueId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([offerId, type, createdAt])
+  @@index([venueId])
+  @@map("interactions")
+}
+
+model UserStats {
+  userId     BigInt   @id @map("user_id") @db.UnsignedBigInt
+  savedCount Int      @default(0) @map("saved_count")
+  savedKg    Decimal  @default(0) @map("saved_kg") @db.Decimal(10, 2)
+  savedMoney Decimal  @default(0) @map("saved_money") @db.Decimal(12, 2)
+  co2Kg      Decimal  @default(0) @map("co2_kg") @db.Decimal(10, 2)
+  levelId    BigInt?  @map("level_id") @db.UnsignedBigInt
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  level Level? @relation(fields: [levelId], references: [id])
+
+  @@index([levelId])
+  @@map("user_stats")
+}
+
+model UserAchievement {
+  userId        BigInt   @map("user_id") @db.UnsignedBigInt
+  achievementId BigInt   @map("achievement_id") @db.UnsignedBigInt
+  earnedAt      DateTime @default(now()) @map("earned_at") @db.DateTime(3)
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@id([userId, achievementId])
+  @@index([achievementId])
+  @@map("user_achievements")
+}
+
+model UserPreferences {
+  userId          BigInt   @id @map("user_id") @db.UnsignedBigInt
+  categoryWeights Json     @map("category_weights")
+  tagWeights      Json     @map("tag_weights")
+  priceBand       Json?    @map("price_band")
+  preferredHours  Json?    @map("preferred_hours")
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
+}
+
+
+model NotificationSettings {
+  userId               BigInt   @id @map("user_id") @db.UnsignedBigInt
+  pushEnabled          Boolean  @default(true) @map("push_enabled")
+  emailEnabled         Boolean  @default(true) @map("email_enabled")
+  orderUpdates         Boolean  @default(true) @map("order_updates")
+  pickupReminders      Boolean  @default(true) @map("pickup_reminders")
+  favoritesNewListings Boolean  @default(true) @map("favorites_new_listings")
+  marketing            Boolean  @default(false)
+  updatedAt            DateTime @updatedAt @map("updated_at") @db.DateTime(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_settings")
+}
+
+model PushSubscription {
+  id        BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  userId    BigInt   @map("user_id") @db.UnsignedBigInt
+  endpoint  String   @unique @db.VarChar(500)
+  p256dh    String   @db.VarChar(255)
+  auth      String   @db.VarChar(255)
+  userAgent String?  @map("user_agent") @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+model Notification {
+  id        BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  userId    BigInt    @map("user_id") @db.UnsignedBigInt
+  type      String    @db.VarChar(50)
+  title     String    @db.VarChar(255)
+  body      String    @db.VarChar(1000)
+  data      Json?
+  readAt    DateTime? @map("read_at") @db.DateTime(3)
+  createdAt DateTime  @default(now()) @map("created_at") @db.DateTime(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+
+enum SettlementStatus {
+  pending
+  paid
+}
+
+model Settlement {
+  id               BigInt           @id @default(autoincrement()) @db.UnsignedBigInt
+  venueId          BigInt           @map("venue_id") @db.UnsignedBigInt
+  periodStart      DateTime         @map("period_start") @db.Date
+  periodEnd        DateTime         @map("period_end") @db.Date
+  grossAmount      Decimal          @map("gross_amount") @db.Decimal(10, 2)
+  commissionAmount Decimal          @map("commission_amount") @db.Decimal(10, 2)
+  refundsAmount    Decimal          @map("refunds_amount") @db.Decimal(10, 2)
+  payoutAmount     Decimal          @map("payout_amount") @db.Decimal(10, 2)
+  status           SettlementStatus @default(pending)
+  paidAt           DateTime?        @map("paid_at") @db.DateTime(3)
+  paidReference    String?          @map("paid_reference") @db.VarChar(100)
+  createdAt        DateTime         @default(now()) @map("created_at") @db.DateTime(3)
+
+  venue Venue            @relation(fields: [venueId], references: [id])
+  items SettlementItem[]
+
+  @@unique([venueId, periodStart])
+  @@map("settlements")
+}
+
+model SettlementItem {
+  settlementId BigInt  @map("settlement_id") @db.UnsignedBigInt
+  orderId      BigInt  @map("order_id") @db.UnsignedBigInt
+  amount       Decimal @db.Decimal(10, 2)
+  commission   Decimal @db.Decimal(10, 2)
+
+  settlement Settlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+  order      Order      @relation(fields: [orderId], references: [id])
+
+  @@id([settlementId, orderId])
+  @@index([orderId])
+  @@map("settlement_items")
+}
+
+
+model AuditLog {
+  id         BigInt   @id @default(autoincrement()) @db.UnsignedBigInt
+  actorId    BigInt?  @map("actor_id") @db.UnsignedBigInt
+  action     String   @db.VarChar(100)
+  entityType String   @map("entity_type") @db.VarChar(50)
+  entityId   BigInt?  @map("entity_id") @db.UnsignedBigInt
+  diff       Json?
+  ip         Bytes?   @db.VarBinary(16)
+  createdAt  DateTime @default(now()) @map("created_at") @db.DateTime(3)
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@map("audit_log")
+}
