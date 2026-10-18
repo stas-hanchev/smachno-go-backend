@@ -10,7 +10,11 @@ export const publicId = Joi.string()
   .length(26)
   .pattern(/^[0-9A-HJKMNP-TV-Z]{26}$/);
 
-export const email = Joi.string().trim().lowercase().email().max(255);
+export const email = Joi.string()
+  .trim()
+  .lowercase()
+  .email({ tlds: { allow: false } })
+  .max(255);
 
 export const password = Joi.string().min(8).max(128).messages({
   'string.min': 'Пароль має містити щонайменше 8 символів',
