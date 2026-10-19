@@ -4,6 +4,7 @@ import { env } from '../../config/env.js';
 import type { UserRole } from '../../generated/prisma/enums.js';
 import { randomToken, sha256 } from '../../lib/crypto.js';
 import { AppError } from '../../lib/errors.js';
+import { ipToBytes } from '../../lib/ip.js';
 import { prisma } from '../../lib/prisma.js';
 
 interface AccessPayload {
@@ -34,13 +35,6 @@ export function verifyAccessToken(token: string): { userId: bigint; role: UserRo
 export interface SessionMeta {
   userAgent?: string | undefined;
   ip?: string | undefined;
-}
-
-function ipToBytes(ip: string | undefined): Uint8Array<ArrayBuffer> | null {
-  if (!ip) return null;
-  const v4 = ip.replace(/^::ffff:/, '');
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(v4)) return new Uint8Array(v4.split('.').map(Number));
-  return null;
 }
 
 export async function issueRefreshToken(

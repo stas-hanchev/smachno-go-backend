@@ -1,12 +1,54 @@
 import { celebrate, Joi, Segments } from 'celebrate';
-import { Router } from 'express';
+import express, { Router, type Request, type Response } from 'express';
 import { env } from '../../config/env.js';
 import { notFound } from '../../lib/errors.js';
+import { logger } from '../../lib/logger.js';
 import { prisma } from '../../lib/prisma.js';
 import { requireAuth } from '../../middleware/auth.js';
-import { processPaymentResult } from './payments.service.js';
+import { rateLimit } from '../../middleware/rate-limit.js';
+import {
+  handleLiqpayCallback,
+  processPaymentResult,
+  syncPaymentStatus,
+} from './payments.service.js';
 
 export const paymentsRouter = Router();
+
+const form = express.urlencoded({ extended: false, limit: '64kb' });
+
+if (env.LIQPAY_PRIVATE_KEY) {
+  paymentsRouter.post('/liqpay/callback', form, async (req, res) => {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await handleLiqpayCallback(body.data, body.signature);
+    res.status(result.httpStatus).json({ ok: result.httpStatus === 200 });
+  });
+}
+
+async function handleReturn(req: Request, res: Response) {
+  const orderId = typeof req.query.orderId === 'string' ? req.query.orderId.slice(0, 64) : '';
+  const payment = orderId
+    ? await prisma.payment.findUnique({
+        where: { providerOrderId: orderId },
+        include: { order: { select: { publicId: true } } },
+      })
+    : null;
+  if (!payment) {
+    res.redirect(303, `${env.APP_URL}/orders`);
+    return;
+  }
+  if (payment.status === 'created' || payment.status === 'processing') {
+    try {
+      await syncPaymentStatus(payment.providerOrderId);
+    } catch (err) {
+      logger.warn({ err, providerOrderId: payment.providerOrderId }, 'Payment status check failed');
+    }
+  }
+  res.redirect(303, `${env.APP_URL}/orders/${payment.order.publicId}?payment=return`);
+}
+
+const returnLimit = rateLimit({ points: 30, durationSec: 60 });
+paymentsRouter.get('/liqpay/return', returnLimit, handleReturn);
+paymentsRouter.post('/liqpay/return', returnLimit, form, handleReturn);
 
 if (env.PAYMENT_PROVIDER === 'fake') {
   paymentsRouter.post(

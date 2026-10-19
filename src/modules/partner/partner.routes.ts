@@ -14,6 +14,7 @@ import {
 import { requireAuth, requireVenueRole } from '../../middleware/auth.js';
 import * as listings from './listings.service.js';
 import * as offers from './offers.service.js';
+import { onboardingRouter } from './onboarding.routes.js';
 import * as pickup from './pickup.service.js';
 
 const member = requireVenueRole(['owner', 'staff'], { allowAdmin: true });
@@ -46,6 +47,7 @@ const venueId = (params: Record<string, unknown>) => BigInt(params.venueId as st
 export const partnerRouter = Router();
 
 partnerRouter.use(requireAuth);
+partnerRouter.use(onboardingRouter);
 
 partnerRouter.get('/venues', async (req, res) => {
   const memberships = await prisma.venueMember.findMany({

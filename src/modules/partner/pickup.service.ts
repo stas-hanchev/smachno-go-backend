@@ -1,10 +1,17 @@
 import type { OrderStatus, Prisma } from '../../generated/prisma/client.js';
+import { publishAfterCommit } from '../../lib/after-commit.js';
 import { AppError, businessRule, notFound } from '../../lib/errors.js';
 import { formatMoney } from '../../lib/money.js';
 import { prisma, type Tx } from '../../lib/prisma.js';
 import { getSettings } from '../../lib/settings.js';
 import { dateOnlyToDb, dbToDateOnly, kyivDate } from '../../lib/time.js';
 import { lockOrder, recordStatus, refundOrderPayment, releaseStock } from '../orders/order-core.js';
+import {
+  listingChanged,
+  notifyOrderAfterCommit,
+  orderChanged,
+  publishListingUpdate,
+} from '../orders/order-events.js';
 import { parseVoucherToken, voucherTokenHash } from '../orders/voucher.js';
 
 const venueOrderInclude = {
@@ -130,32 +137,35 @@ export async function pickupOrder(venueId: bigint, publicId: string, staffUserId
   const order = await prisma.order.findUnique({ where: { publicId }, include: venueOrderInclude });
   if (!order || order.venueId !== venueId) throw notFound('Замовлення не знайдено');
 
-  await prisma.$transaction(async (tx) => {
-    const locked = await lockOrder(tx, order.id);
-    assertPickable({ ...order, ...locked });
-    await tx.order.update({
-      where: { id: locked.id },
-      data: {
-        status: 'picked_up',
-        voucherStatus: 'used',
-        pickedUpAt: new Date(),
-        pickedUpBy: staffUserId,
-      },
-    });
-    await recordStatus(tx, locked.id, locked.status, 'picked_up', {
-      type: 'venue',
-      id: staffUserId,
-    });
-    await addSavedStats(tx, locked);
-    await tx.interaction.create({
-      data: {
-        userId: locked.userId,
-        offerId: order.listing.offerId,
-        venueId,
-        type: 'pickup',
-      },
-    });
-  });
+  await publishAfterCommit((after) =>
+    prisma.$transaction(async (tx) => {
+      const locked = await lockOrder(tx, order.id);
+      assertPickable({ ...order, ...locked });
+      await tx.order.update({
+        where: { id: locked.id },
+        data: {
+          status: 'picked_up',
+          voucherStatus: 'used',
+          pickedUpAt: new Date(),
+          pickedUpBy: staffUserId,
+        },
+      });
+      await recordStatus(tx, locked.id, locked.status, 'picked_up', {
+        type: 'venue',
+        id: staffUserId,
+      });
+      await addSavedStats(tx, locked);
+      await tx.interaction.create({
+        data: {
+          userId: locked.userId,
+          offerId: order.listing.offerId,
+          venueId,
+          type: 'pickup',
+        },
+      });
+      orderChanged(after, locked, locked.status, 'picked_up');
+    }),
+  );
 
   const updated = await prisma.order.findUniqueOrThrow({
     where: { id: order.id },
@@ -169,32 +179,44 @@ async function cancelOrderByVenue(
   reason: string,
   actorId: bigint,
 ): Promise<boolean> {
-  const refund = await prisma.$transaction(async (tx) => {
-    const locked = await lockOrder(tx, orderId);
-    if (locked.status !== 'paid' && locked.status !== 'pending_payment') return null;
-    await tx.order.update({
-      where: { id: locked.id },
-      data: {
-        status: 'cancelled_by_venue',
-        cancelReason: reason,
-        ...(locked.voucherStatus ? { voucherStatus: 'expired' } : {}),
-      },
+  return publishAfterCommit(async (after) => {
+    const refund = await prisma.$transaction(async (tx) => {
+      const locked = await lockOrder(tx, orderId);
+      if (locked.status !== 'paid' && locked.status !== 'pending_payment') return null;
+      await tx.order.update({
+        where: { id: locked.id },
+        data: {
+          status: 'cancelled_by_venue',
+          cancelReason: reason,
+          ...(locked.voucherStatus ? { voucherStatus: 'expired' } : {}),
+        },
+      });
+      await recordStatus(
+        tx,
+        locked.id,
+        locked.status,
+        'cancelled_by_venue',
+        { type: 'venue', id: actorId },
+        reason,
+      );
+      await releaseStock(tx, locked.listingId, locked.quantity);
+      listingChanged(after, locked.listingId);
+      orderChanged(after, locked, locked.status, 'cancelled_by_venue');
+      notifyOrderAfterCommit(after, locked.id, {
+        kind: 'cancelled_by_venue',
+        refund: locked.status === 'paid',
+        reason,
+      });
+      return locked.status === 'paid' ? locked : null;
     });
-    await recordStatus(
-      tx,
-      locked.id,
-      locked.status,
-      'cancelled_by_venue',
-      { type: 'venue', id: actorId },
-      reason,
-    );
-    await releaseStock(tx, locked.listingId, locked.quantity);
-    return locked.status === 'paid' ? locked : null;
+    if (refund) {
+      await refundOrderPayment(refund.id, refund.totalAmount, reason, {
+        type: 'venue',
+        id: actorId,
+      });
+    }
+    return refund !== null;
   });
-  if (refund) {
-    await refundOrderPayment(refund.id, refund.totalAmount, reason, { type: 'venue', id: actorId });
-  }
-  return refund !== null;
 }
 
 export async function cancelVenueOrder(
@@ -239,5 +261,6 @@ export async function cancelListing(
   for (const order of orders) {
     if (await cancelOrderByVenue(order.id, reason, actorId)) refunded += 1;
   }
+  await publishListingUpdate(listingId);
   return { cancelledOrders: orders.length, refundedOrders: refunded };
 }

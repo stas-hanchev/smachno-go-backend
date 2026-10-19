@@ -56,13 +56,16 @@ export async function resetDb() {
   resetSettingsCache();
 }
 
-export async function createUser(opts: { verified?: boolean; email?: string } = {}) {
+export async function createUser(
+  opts: { verified?: boolean; email?: string; role?: 'customer' | 'admin' | 'super_admin' } = {},
+) {
   const user = await prisma.user.create({
     data: {
       email: opts.email ?? `user-${randomUUID()}@test.local`,
       firstName: 'Тест',
       lastName: 'Користувач',
       emailVerifiedAt: opts.verified === false ? null : new Date(),
+      role: opts.role ?? 'customer',
     },
   });
   return { user, token: signAccessToken(user.id, user.role) };

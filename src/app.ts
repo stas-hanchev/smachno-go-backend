@@ -9,8 +9,11 @@ import { logger } from './lib/logger.js';
 import { prisma } from './lib/prisma.js';
 import { errorHandler, notFoundHandler } from './middleware/error-handler.js';
 import { globalRateLimit } from './middleware/rate-limit.js';
+import { adminRouter } from './modules/admin/admin.routes.js';
 import { authRouter, CSRF_HEADER } from './modules/auth/auth.routes.js';
 import { catalogRouter } from './modules/catalog/catalog.routes.js';
+import { favoritesRouter } from './modules/favorites/favorites.routes.js';
+import { notificationsRouter } from './modules/notifications/notifications.routes.js';
 import { ordersRouter } from './modules/orders/orders.routes.js';
 import { partnerRouter } from './modules/partner/partner.routes.js';
 import { paymentsRouter } from './modules/payments/payments.routes.js';
@@ -72,10 +75,13 @@ export function createApp(): Express {
   const api = express.Router();
   api.use(globalRateLimit);
   api.use('/auth', authRouter);
+  api.use('/me', notificationsRouter);
   api.use('/me', meRouter);
+  api.use('/favorites', favoritesRouter);
   api.use('/orders', ordersRouter);
   api.use('/payments', paymentsRouter);
   api.use('/partner', partnerRouter);
+  api.use('/admin', adminRouter);
   api.use('/', catalogRouter);
 
   app.use('/api/v1', api);

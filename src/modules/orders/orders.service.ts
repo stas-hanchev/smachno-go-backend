@@ -1,5 +1,6 @@
 import { ulid } from 'ulid';
 import type { OrderSource } from '../../generated/prisma/client.js';
+import { publishAfterCommit } from '../../lib/after-commit.js';
 import { AppError, businessRule, notFound } from '../../lib/errors.js';
 import { toMoney, type Decimal } from '../../lib/money.js';
 import { prisma, type Tx } from '../../lib/prisma.js';
@@ -7,6 +8,7 @@ import { getSettings } from '../../lib/settings.js';
 import { addMinutes } from '../../lib/time.js';
 import { getGateway, type CheckoutParams } from '../payments/provider.js';
 import { customerOrderInclude, toCustomerOrderDto } from './order.dto.js';
+import { listingChanged, notifyOrderAfterCommit, orderChanged } from './order-events.js';
 import {
   lockOrder,
   recordStatus,
@@ -20,7 +22,7 @@ const ACTIVE_STATUSES = ['pending_payment', 'paid'] as const;
 
 async function createPaymentAttempt(
   tx: Tx,
-  order: { id: bigint; publicId: string; totalAmount: Decimal },
+  order: { id: bigint; publicId: string; totalAmount: Decimal; reservedUntil: Date },
   title: string,
 ): Promise<CheckoutParams> {
   const gateway = getGateway();
@@ -33,6 +35,7 @@ async function createPaymentAttempt(
     providerOrderId,
     amount: order.totalAmount,
     description: `СмачноGo: ${title}`,
+    expiresAt: order.reservedUntil,
   });
 }
 
@@ -90,39 +93,43 @@ export async function createOrder(
   const savingAmount = toMoney(listing.originalPrice.minus(unitPrice).times(input.quantity));
   const commissionAmount = toMoney(totalAmount.times(listing.venue.commissionRate));
 
-  const result = await prisma.$transaction(async (tx) => {
-    if (!(await reserveStock(tx, listingId, input.quantity))) {
-      throw new AppError('LISTING_UNAVAILABLE');
-    }
-    const order = await tx.order.create({
-      data: {
-        publicId: ulid(),
-        userId,
-        listingId,
-        venueId: listing.venueId,
-        quantity: input.quantity,
-        unitPrice,
-        unitOriginalPrice: listing.originalPrice,
-        totalAmount,
-        savingAmount,
-        commissionAmount,
-        status: 'pending_payment',
-        reservedUntil: addMinutes(new Date(), settings.reservation_ttl_min),
-        pickupDate: listing.pickupDate,
-        pickupStart: listing.pickupStart,
-        pickupEnd: listing.pickupEnd,
-        source: input.source ?? null,
-        idempotencyKey: idempotencyKey ?? null,
-      },
-      include: customerOrderInclude,
-    });
-    await recordStatus(tx, order.id, null, 'pending_payment', { type: 'customer', id: userId });
-    await tx.interaction.create({
-      data: { userId, offerId: listing.offerId, venueId: listing.venueId, type: 'reserve' },
-    });
-    const payment = await createPaymentAttempt(tx, order, listing.offer.title);
-    return { order, payment };
-  });
+  const result = await publishAfterCommit((after) =>
+    prisma.$transaction(async (tx) => {
+      if (!(await reserveStock(tx, listingId, input.quantity))) {
+        throw new AppError('LISTING_UNAVAILABLE');
+      }
+      const order = await tx.order.create({
+        data: {
+          publicId: ulid(),
+          userId,
+          listingId,
+          venueId: listing.venueId,
+          quantity: input.quantity,
+          unitPrice,
+          unitOriginalPrice: listing.originalPrice,
+          totalAmount,
+          savingAmount,
+          commissionAmount,
+          status: 'pending_payment',
+          reservedUntil: addMinutes(new Date(), settings.reservation_ttl_min),
+          pickupDate: listing.pickupDate,
+          pickupStart: listing.pickupStart,
+          pickupEnd: listing.pickupEnd,
+          source: input.source ?? null,
+          idempotencyKey: idempotencyKey ?? null,
+        },
+        include: customerOrderInclude,
+      });
+      await recordStatus(tx, order.id, null, 'pending_payment', { type: 'customer', id: userId });
+      await tx.interaction.create({
+        data: { userId, offerId: listing.offerId, venueId: listing.venueId, type: 'reserve' },
+      });
+      const payment = await createPaymentAttempt(tx, order, listing.offer.title);
+      listingChanged(after, listingId);
+      orderChanged(after, order, null, 'pending_payment');
+      return { order, payment };
+    }),
+  );
 
   return { order: toCustomerOrderDto(result.order), payment: result.payment, replayed: false };
 }
@@ -192,44 +199,52 @@ export async function cancelByCustomer(userId: bigint, publicId: string, reason?
   const order = await loadCustomerOrder(userId, publicId);
   const settings = await getSettings();
 
-  const refundNeeded = await prisma.$transaction(async (tx) => {
-    const locked = await lockOrder(tx, order.id);
-    if (locked.status === 'paid') {
-      const deadline = addMinutes(locked.pickupStart, -settings.cancel_deadline_hours * 60);
-      if (new Date() > deadline) {
-        throw businessRule(
-          `Скасувати замовлення можна не пізніше ніж за ${settings.cancel_deadline_hours} год до початку самовивозу`,
-        );
+  await publishAfterCommit(async (after) => {
+    const refundNeeded = await prisma.$transaction(async (tx) => {
+      const locked = await lockOrder(tx, order.id);
+      if (locked.status === 'paid') {
+        const deadline = addMinutes(locked.pickupStart, -settings.cancel_deadline_hours * 60);
+        if (new Date() > deadline) {
+          throw businessRule(
+            `Скасувати замовлення можна не пізніше ніж за ${settings.cancel_deadline_hours} год до початку самовивозу`,
+          );
+        }
+      } else if (locked.status !== 'pending_payment') {
+        throw new AppError('ORDER_STATE_CONFLICT');
       }
-    } else if (locked.status !== 'pending_payment') {
-      throw new AppError('ORDER_STATE_CONFLICT');
+
+      await tx.order.update({
+        where: { id: locked.id },
+        data: {
+          status: 'cancelled_by_customer',
+          cancelReason: reason ?? null,
+          ...(locked.voucherStatus ? { voucherStatus: 'expired' } : {}),
+        },
+      });
+      await recordStatus(
+        tx,
+        locked.id,
+        locked.status,
+        'cancelled_by_customer',
+        { type: 'customer', id: userId },
+        reason,
+      );
+      await releaseStock(tx, locked.listingId, locked.quantity);
+      listingChanged(after, locked.listingId);
+      orderChanged(after, locked, locked.status, 'cancelled_by_customer');
+      notifyOrderAfterCommit(after, locked.id, {
+        kind: 'cancelled_by_customer',
+        refund: locked.status === 'paid',
+      });
+      return locked.status === 'paid';
+    });
+
+    if (refundNeeded) {
+      await refundOrderPayment(order.id, order.totalAmount, reason ?? 'Скасовано покупцем', {
+        type: 'customer',
+        id: userId,
+      });
     }
-
-    await tx.order.update({
-      where: { id: locked.id },
-      data: {
-        status: 'cancelled_by_customer',
-        cancelReason: reason ?? null,
-        ...(locked.voucherStatus ? { voucherStatus: 'expired' } : {}),
-      },
-    });
-    await recordStatus(
-      tx,
-      locked.id,
-      locked.status,
-      'cancelled_by_customer',
-      { type: 'customer', id: userId },
-      reason,
-    );
-    await releaseStock(tx, locked.listingId, locked.quantity);
-    return locked.status === 'paid';
   });
-
-  if (refundNeeded) {
-    await refundOrderPayment(order.id, order.totalAmount, reason ?? 'Скасовано покупцем', {
-      type: 'customer',
-      id: userId,
-    });
-  }
   return getOrder(userId, publicId);
 }

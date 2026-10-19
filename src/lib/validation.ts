@@ -39,3 +39,24 @@ export const pagination = {
 };
 
 export const celebrateOptions = { abortEarly: false, stripUnknown: true } as const;
+
+export const phone = Joi.string()
+  .trim()
+  .pattern(/^\+[1-9]\d{7,14}$/)
+  .messages({ 'string.pattern.base': 'Телефон має бути у форматі +380XXXXXXXXX' });
+
+export const taxId = Joi.string()
+  .trim()
+  .pattern(/^(\d{8}|\d{10})$/)
+  .messages({ 'string.pattern.base': 'ЄДРПОУ має містити 8 цифр, ІПН 10 цифр' });
+
+export const iban = Joi.string()
+  .trim()
+  .replace(/\s+/g, '')
+  .uppercase()
+  .pattern(/^UA\d{27}$/)
+  .messages({ 'string.pattern.base': 'IBAN має бути у форматі UA + 27 цифр' });
+
+export const imageUrl = Joi.string()
+  .uri({ scheme: ['https', 'http'] })
+  .max(500);

@@ -24,6 +24,9 @@ function toAppError(err: unknown): AppError {
   if (err instanceof Prisma.PrismaClientKnownRequestError) {
     if (err.code === 'P2025') return new AppError('NOT_FOUND');
     if (err.code === 'P2002') return new AppError('ORDER_STATE_CONFLICT', 'Такий запис вже існує');
+    if (err.code === 'P2003') {
+      return new AppError('BUSINESS_RULE', 'Запис використовується й не може бути видалений');
+    }
   }
 
   if (err instanceof SyntaxError && 'body' in err) {

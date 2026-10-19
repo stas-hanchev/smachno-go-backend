@@ -3,6 +3,7 @@ import { AppError, businessRule, notFound } from '../../lib/errors.js';
 import { discountPercent, formatMoney } from '../../lib/money.js';
 import { prisma } from '../../lib/prisma.js';
 import { getSettings } from '../../lib/settings.js';
+import { publishListingUpdate } from '../orders/order-events.js';
 import {
   addDays,
   dateOnlyToDb,
@@ -141,6 +142,7 @@ export async function createListing(
     },
     include: { offer: { select: { title: true } } },
   });
+  await publishListingUpdate(listing.id);
   return toPartnerListingDto(listing);
 }
 
@@ -202,6 +204,7 @@ export async function updateListing(
       include: { offer: { select: { title: true } } },
     });
   });
+  await publishListingUpdate(listingId);
   return toPartnerListingDto(listing);
 }
 
@@ -218,5 +221,6 @@ export async function closeListing(venueId: bigint, listingId: bigint) {
     where: { id: listingId },
     include: { offer: { select: { title: true } } },
   });
+  await publishListingUpdate(listingId);
   return toPartnerListingDto(listing);
 }

@@ -17,6 +17,8 @@ services:
         sync: false
       - key: APP_URL
         sync: false
+      - key: API_PUBLIC_URL
+        sync: false
       - key: JWT_ACCESS_SECRET
         generateValue: true
       - key: VOUCHER_HMAC_SECRET
@@ -29,6 +31,10 @@ services:
         value: 'true'
       - key: PAYMENT_PROVIDER
         value: liqpay
+      - key: LIQPAY_PUBLIC_KEY
+        sync: false
+      - key: LIQPAY_PRIVATE_KEY
+        sync: false
       - key: RUN_JOBS_IN_PROCESS
         value: 'true'
       - key: GOOGLE_CLIENT_ID

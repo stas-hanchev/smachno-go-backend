@@ -53,16 +53,21 @@ TEST_DATABASE_URL=mysql://smachnogo:smachnogo@localhost:3306/smachnogo_test npm 
 src/
   app.ts, server.ts       # Express app and process entry point
   config/env.ts           # environment validation at startup
-  lib/                    # prisma, logger, errors, geo, time (Europe/Kyiv), crypto, money, settings, mailer
+  lib/                    # prisma, logger, errors, geo, time (Europe/Kyiv), crypto, money, settings, mailer,
+                          # audit log, after-commit effects, realtime emitter, slugs
   middleware/             # auth and roles, rate limit, error format
+  realtime/socket.ts      # Socket.io server: handshake auth, rooms
   modules/
     auth/                 # register, login, Google, refresh rotation, email verify, password reset
     users/                # /me
+    notifications/        # in-app notifications, email by notification settings
     catalog/              # public dictionaries, listing search, venue and listing pages
-    partner/              # venue cabinet: offers, listings, orders, pickup
-    orders/               # customer orders, reservation, voucher
-    payments/             # payment gateway adapter (fake for now), payment result processing
-  jobs/                   # expire reservations, close sales, mark no-shows
+    favorites/            # favorite venues
+    partner/              # applications, venue profile, hours, team and invites, offers, listings, pickup
+    orders/               # customer orders, reservation, voucher, order events and emails
+    payments/             # LiqPay and fake gateways, callback, status sync, payment result processing
+    admin/                # applications, venues, users, orders, dictionaries, settings, audit log
+  jobs/                   # expire reservations, close sales, no-shows, reminders, payment reconcile, token cleanup
 prisma/
   schema.prisma, migrations/, seed.ts
 test/unit, test/integration
@@ -74,18 +79,75 @@ Errors: `{ "error": { "code", "message", "details?" } }`, messages in Ukrainian,
 Money is a string with two decimals, time is ISO 8601 UTC. Auth: `Authorization: Bearer <accessToken>`;
 the refresh token is an httpOnly cookie `sg_rt`, and `/auth/refresh` and `/auth/logout` require the header `x-sg-csrf: 1`.
 
-| Area           | Endpoints                                                                                                                                                                                                                         |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auth           | `POST /auth/register`, `/login`, `/google`, `/refresh`, `/logout`, `/logout-all`, `/verify-email`, `/verify-email/resend`, `/forgot-password`, `/reset-password`                                                                  |
-| Profile        | `GET/PATCH /me`, `PATCH /me/password`                                                                                                                                                                                             |
-| Catalog        | `GET /cities`, `/categories`, `/tags`, `/allergens`, `/listings`, `/listings/:id`, `/listings/:id/nearby`, `/venues/:slug`, `/venues/:slug/listings`                                                                              |
-| Orders         | `POST /orders` (`Idempotency-Key`), `GET /orders?status=active\|history`, `GET /orders/:publicId`, `GET /orders/:publicId/voucher`, `POST /orders/:publicId/pay`, `POST /orders/:publicId/cancel`                                 |
-| Payments (dev) | `POST /payments/fake/:providerOrderId/confirm` `{ result: "success" \| "failure" }`                                                                                                                                               |
-| Venue cabinet  | `GET /partner/venues`; under `/partner/venues/:venueId`: `offers` (CRUD, DELETE = archive), `listings` (list, create, PATCH, `close`, `cancel`), `orders`, `pickups/verify`, `orders/:publicId/pickup`, `orders/:publicId/cancel` |
-| Service        | `GET /health`, `GET /ready`                                                                                                                                                                                                       |
+| Area          | Endpoints                                                                                                                                                                                               |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth          | `POST /auth/register`, `/login`, `/google`, `/refresh`, `/logout`, `/logout-all`, `/verify-email`, `/verify-email/resend`, `/forgot-password`, `/reset-password`                                        |
+| Profile       | `GET/PATCH /me`, `PATCH /me/password`, `GET /me/notifications?unread=`, `POST /me/notifications/read` `{ ids? }`, `GET/PATCH /me/notification-settings`                                                 |
+| Catalog       | `GET /cities`, `/categories`, `/tags`, `/allergens`, `/listings`, `/listings/:id`, `/listings/:id/nearby`, `/venues/:slug`, `/venues/:slug/listings`                                                    |
+| Favorites     | `GET /favorites`, `PUT /favorites/:venueId` `{ notifyNewListings? }`, `DELETE /favorites/:venueId`; catalog cards carry `isFavoriteVenue`                                                               |
+| Orders        | `POST /orders` (`Idempotency-Key`), `GET /orders?status=active\|history`, `GET /orders/:publicId`, `GET /orders/:publicId/voucher`, `POST /orders/:publicId/pay`, `POST /orders/:publicId/cancel`       |
+| Payments      | `POST /payments/liqpay/callback` (form `data`, `signature`), `GET/POST /payments/liqpay/return?orderId=`; dev only: `POST /payments/fake/:providerOrderId/confirm` `{ result: "success" \| "failure" }` |
+| Partner       | `POST /partner/applications`, `GET /partner/applications/mine`, `POST /partner/invites/accept` `{ token }`, `GET /partner/venues`                                                                       |
+| Venue cabinet | under `/partner/venues/:venueId`: `GET/PATCH` profile, `PUT hours`, `POST closures`, `DELETE closures/:id`, `POST activate`, `members` (list, `invite`, PATCH status, DELETE), `DELETE invites/:id`     |
+|               | `offers` (CRUD, DELETE = archive), `listings` (list, create, PATCH, `close`, `cancel`), `orders`, `pickups/verify`, `orders/:publicId/pickup`, `orders/:publicId/cancel`                                |
+| Admin         | under `/admin`: `applications` (list, get, `approve`, `reject`), `venues` (list, get, PATCH status and commission), `users` (list, get, PATCH status and role), `orders` (search, get, `refund`)        |
+|               | `categories`, `tags`, `allergens`, `cities` (list, create, PATCH, DELETE), `GET/PUT settings`, `GET audit-log`                                                                                          |
+| Service       | `GET /health`, `GET /ready`                                                                                                                                                                             |
 
 Payment flow in development: `POST /orders` returns `payment.checkoutUrl`; POST to it (as the same user)
 to simulate the provider callback, then `GET /orders/:publicId/voucher` returns the QR token and the 6-character code.
+
+Roles: venue owners manage the profile, team, offers and cancellations; staff manage listings and pickups.
+Admins see venue cabinets read-only. Only a super admin can grant or change admin roles. Every admin change
+is written to `audit_log`.
+
+### LiqPay
+
+With `PAYMENT_PROVIDER=liqpay`, `payment` in the order response holds `checkoutUrl`, `data` and `signature`:
+the frontend submits `data` and `signature` as a form POST to `https://www.liqpay.ua/api/3/checkout`
+(or opens `checkoutUrl`). The checkout carries `expired_date` equal to the end of the reservation.
+
+- LiqPay calls `POST {API_PUBLIC_URL}/api/v1/payments/liqpay/callback`. Every call is stored in `payment_webhook_log`;
+  the signature, the public key, the amount and the currency are checked before the order changes. A repeated
+  callback does not change the order and does not send emails again.
+- After payment the browser comes to `/payments/liqpay/return`, which checks the status with the LiqPay API
+  if no callback has arrived yet and redirects to `{APP_URL}/orders/:publicId?payment=return`.
+- A payment that arrives after the reservation expired reserves the stock again or, if the sets are sold out,
+  marks the order `refunded` and refunds the money (TZ 8.8).
+- Refunds go through the LiqPay API on cancellation by the customer, by the venue, on listing cancellation
+  and from the admin panel; each attempt is a row in `refunds`. The `reconcilePayments` job asks LiqPay for
+  the status of payments without a final status (from 3 minutes to 24 hours old).
+- For a sandbox, set `LIQPAY_SANDBOX=true` and sandbox keys. Callbacks need a public URL: a tunnel
+  (`cloudflared tunnel --url http://localhost:4000`, then set `API_PUBLIC_URL`) or a render.com deploy.
+  Without a tunnel, the return URL still finalizes the payment through the status API.
+
+### Realtime (Socket.io)
+
+Connect to the API origin with `auth: { token: <accessToken> }` (or without a token for public listing updates).
+A user joins `user:<id>`, admins also join `admin`. Client events with acknowledgements:
+`listing:subscribe` / `listing:unsubscribe` `{ listingIds }`, `venue:subscribe` / `venue:unsubscribe` `{ venueId }`
+(active venue members and admins only).
+
+| Event              | Room                         | Payload                                              |
+| ------------------ | ---------------------------- | ---------------------------------------------------- |
+| `listing:updated`  | `listing:<id>`, `venue:<id>` | `{ listingId, quantityLeft, quantityTotal, status }` |
+| `order:status`     | `user:<id>`                  | `{ publicId, status }`                               |
+| `order:new`        | `venue:<id>`                 | `{ publicId, status }` when an order is paid         |
+| `order:updated`    | `venue:<id>`                 | `{ publicId, status }` after a paid order changes    |
+| `notification:new` | `user:<id>`                  | notification as in `GET /me/notifications`           |
+| `application:new`  | `admin`                      | `{ id, businessName, createdAt }`                    |
+
+Events are published only after the database transaction commits (`publishAfterCommit`). One API instance
+for now: several instances will need the Redis adapter.
+
+### Notifications and jobs
+
+Emails: payment and voucher, cancellation and refund, late payment refund, pickup reminder 30 minutes
+before the window, staff invite, application decision. Order emails respect `notification_settings`
+(`emailEnabled`, `orderUpdates`, `pickupReminders`); every notice is also stored in `notifications`.
+
+In-process jobs: `expirePendingOrders`, `closeListingSales` and `remindPickup` every minute, `markNoShow` and
+`reconcilePayments` every 5 minutes, `cleanupTokens` every 6 hours.
 
 ## Decisions that differ from TZ 1.1
 
@@ -98,6 +160,11 @@ to simulate the provider callback, then `GET /orders/:publicId/voucher` returns 
 - Background jobs run inside the API process (`RUN_JOBS_IN_PROCESS=true`) until the BullMQ worker is added.
 - `PaymentProvider` enum has an extra `fake` value for development; `fake` is refused in production.
 - The reservation `UPDATE` sets `status` before `quantity_left`, because MySQL evaluates SET assignments left to right.
+- Staff invites are `auth_tokens` rows of type `staff_invite` (the inviter as `user_id`, the venue and email in `payload`),
+  so a person without an account can be invited; the membership is created when the invite is accepted.
+- An approved application creates a `draft` venue with the city center as coordinates unless the admin passes
+  `lat`/`lng`; the owner corrects the address and coordinates in the profile before activation.
+- `orders.reminder_sent_at` was added so that the pickup reminder is sent once.
 
 ## Deployment (render.com)
 
@@ -105,8 +172,9 @@ to simulate the provider callback, then `GET /orders/:publicId/voucher` returns 
 `npx prisma migrate deploy`, health check `/health`. Render has no managed MySQL, so `DATABASE_URL`
 points to an external MySQL 8 or to a MySQL private service with a disk. Free instances sleep when idle,
 which pauses the in-process jobs. When the frontend is on another host, set `COOKIE_SAMESITE=none` and `COOKIE_SECURE=true`.
+Set `API_PUBLIC_URL` to the public URL of the service, because LiqPay sends callbacks and redirects there.
 
 ## Not done yet
 
-LiqPay adapter and callback, Socket.io, Redis (BullMQ worker, shared rate limits), file uploads,
-partner applications and onboarding, favorites, reviews, recommendations, admin panel, OpenAPI docs.
+Redis (BullMQ worker, shared rate limits, Socket.io adapter), file uploads, reviews, recommendations
+and `/interactions`, OpenAPI docs, `/metrics`, Sentry, and stage 2 of the TZ.

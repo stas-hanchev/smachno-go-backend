@@ -6,6 +6,7 @@ export interface Env {
   LOG_LEVEL: string;
   CORS_ORIGINS: string[];
   APP_URL: string;
+  API_PUBLIC_URL: string;
   DATABASE_URL: string;
   DB_CONNECTION_LIMIT: number;
   JWT_ACCESS_SECRET: string;
@@ -23,6 +24,9 @@ export interface Env {
   SMTP_PASSWORD: string;
   MAIL_FROM: string;
   PAYMENT_PROVIDER: 'fake' | 'liqpay';
+  LIQPAY_PUBLIC_KEY: string;
+  LIQPAY_PRIVATE_KEY: string;
+  LIQPAY_SANDBOX: boolean;
   RUN_JOBS_IN_PROCESS: boolean;
 }
 
@@ -39,6 +43,7 @@ const schema = Joi.object({
         .filter(Boolean),
     ),
   APP_URL: Joi.string().uri().default('http://localhost:3000'),
+  API_PUBLIC_URL: Joi.string().uri().default('http://localhost:4000'),
   DATABASE_URL: Joi.string()
     .uri({ scheme: ['mysql'] })
     .required(),
@@ -64,6 +69,9 @@ const schema = Joi.object({
   SMTP_PASSWORD: Joi.string().allow('').default(''),
   MAIL_FROM: Joi.string().default('SmachnoGo <no-reply@smachnogo.local>'),
   PAYMENT_PROVIDER: Joi.string().valid('fake', 'liqpay').default('fake'),
+  LIQPAY_PUBLIC_KEY: Joi.string().allow('').default(''),
+  LIQPAY_PRIVATE_KEY: Joi.string().allow('').default(''),
+  LIQPAY_SANDBOX: Joi.boolean().default(false),
   RUN_JOBS_IN_PROCESS: Joi.boolean().default(true),
 }).unknown(true);
 
@@ -76,6 +84,12 @@ function loadEnv(): Env {
   const env = value as Env;
   if (env.NODE_ENV === 'production' && env.PAYMENT_PROVIDER === 'fake') {
     throw new Error('PAYMENT_PROVIDER=fake is not allowed in production');
+  }
+  if (env.PAYMENT_PROVIDER === 'liqpay' && (!env.LIQPAY_PUBLIC_KEY || !env.LIQPAY_PRIVATE_KEY)) {
+    throw new Error('PAYMENT_PROVIDER=liqpay requires LIQPAY_PUBLIC_KEY and LIQPAY_PRIVATE_KEY');
+  }
+  if (env.NODE_ENV === 'production' && env.LIQPAY_SANDBOX) {
+    throw new Error('LIQPAY_SANDBOX=true is not allowed in production');
   }
   if (env.COOKIE_SAMESITE === 'none' && !env.COOKIE_SECURE) {
     throw new Error('COOKIE_SAMESITE=none requires COOKIE_SECURE=true');

@@ -531,6 +531,7 @@ model Order {
   voucherStatus     VoucherStatus? @map("voucher_status")
   voucherValidUntil DateTime?      @map("voucher_valid_until") @db.DateTime(3)
   pickedUpAt        DateTime?      @map("picked_up_at") @db.DateTime(3)
+  reminderSentAt    DateTime?      @map("reminder_sent_at") @db.DateTime(3)
   pickedUpBy        BigInt?        @map("picked_up_by") @db.UnsignedBigInt
   cancelReason      String?        @map("cancel_reason") @db.VarChar(255)
   source            OrderSource?
@@ -552,6 +553,7 @@ model Order {
   @@index([userId, status])
   @@index([venueId, pickupDate, status])
   @@index([status, reservedUntil])
+  @@index([status, pickupStart])
   @@index([listingId])
   @@map("orders")
 }

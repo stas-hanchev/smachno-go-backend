@@ -9,7 +9,7 @@ function bearerToken(header: string | undefined): string | null {
   return header.slice('Bearer '.length).trim() || null;
 }
 
-async function loadUser(token: string): Promise<Express.AuthUser> {
+export async function authenticateToken(token: string): Promise<Express.AuthUser> {
   const { userId } = verifyAccessToken(token);
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -28,7 +28,7 @@ async function loadUser(token: string): Promise<Express.AuthUser> {
 export const requireAuth: RequestHandler = async (req, _res, next) => {
   const token = bearerToken(req.headers.authorization);
   if (!token) throw new AppError('UNAUTHORIZED');
-  req.user = await loadUser(token);
+  req.user = await authenticateToken(token);
   next();
 };
 
@@ -36,7 +36,7 @@ export const optionalAuth: RequestHandler = async (req, _res, next) => {
   const token = bearerToken(req.headers.authorization);
   if (token) {
     try {
-      req.user = await loadUser(token);
+      req.user = await authenticateToken(token);
     } catch {}
   }
   next();
