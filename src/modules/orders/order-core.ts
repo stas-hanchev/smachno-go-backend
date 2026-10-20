@@ -67,6 +67,22 @@ export async function lockOrder(tx: Tx, orderId: bigint): Promise<Order> {
   return tx.order.findUniqueOrThrow({ where: { id: orderId } });
 }
 
+export async function recordPurchase(tx: Tx, order: Order): Promise<void> {
+  const listing = await tx.offerListing.findUniqueOrThrow({
+    where: { id: order.listingId },
+    select: { offerId: true },
+  });
+  await tx.interaction.create({
+    data: {
+      userId: order.userId,
+      offerId: listing.offerId,
+      venueId: order.venueId,
+      type: 'purchase',
+      source: order.source ?? null,
+    },
+  });
+}
+
 export async function issueVoucher(tx: Tx, order: Order): Promise<void> {
   const settings = await getSettings();
   const validUntil = addMinutes(order.pickupEnd, settings.grace_period_min);

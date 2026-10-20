@@ -9,15 +9,61 @@ services:
     startCommand: npm start
     healthCheckPath: /health
     envVars:
-      - key: NODE_ENV
-        value: production
-      - key: DATABASE_URL
-        sync: false
+      - fromGroup: smachnogo-shared
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: smachnogo-redis
+          property: connectionString
       - key: CORS_ORIGINS
         sync: false
       - key: APP_URL
         sync: false
       - key: API_PUBLIC_URL
+        sync: false
+      - key: COOKIE_SAMESITE
+        value: none
+      - key: COOKIE_SECURE
+        value: 'true'
+      - key: RUN_JOBS_IN_PROCESS
+        value: 'false'
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: METRICS_TOKEN
+        sync: false
+
+  - type: worker
+    name: smachnogo-worker
+    runtime: node
+    plan: starter
+    region: frankfurt
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run start:worker
+    envVars:
+      - fromGroup: smachnogo-shared
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: smachnogo-redis
+          property: connectionString
+      - key: APP_URL
+        sync: false
+      - key: API_PUBLIC_URL
+        sync: false
+
+  - type: keyvalue
+    name: smachnogo-redis
+    plan: starter
+    region: frankfurt
+    maxmemoryPolicy: noeviction
+    ipAllowList: []
+
+envVarGroups:
+  - name: smachnogo-shared
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
         sync: false
       - key: JWT_ACCESS_SECRET
         generateValue: true
@@ -25,19 +71,13 @@ services:
         generateValue: true
       - key: DATA_ENCRYPTION_KEY
         sync: false
-      - key: COOKIE_SAMESITE
-        value: none
-      - key: COOKIE_SECURE
-        value: 'true'
       - key: PAYMENT_PROVIDER
-        value: liqpay
+        value: fake
+      - key: ALLOW_FAKE_PAYMENTS
+        value: 'true'
       - key: LIQPAY_PUBLIC_KEY
         sync: false
       - key: LIQPAY_PRIVATE_KEY
-        sync: false
-      - key: RUN_JOBS_IN_PROCESS
-        value: 'true'
-      - key: GOOGLE_CLIENT_ID
         sync: false
       - key: SMTP_HOST
         sync: false
@@ -48,4 +88,12 @@ services:
       - key: SMTP_PASSWORD
         sync: false
       - key: MAIL_FROM
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: SENTRY_DSN
         sync: false

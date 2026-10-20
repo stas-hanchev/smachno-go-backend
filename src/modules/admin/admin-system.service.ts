@@ -1,8 +1,10 @@
 import type { Prisma } from '../../generated/prisma/client.js';
-import { audit } from '../../lib/audit.js';
+import { audit, jsonSafe } from '../../lib/audit.js';
 import { notFound } from '../../lib/errors.js';
 import { prisma } from '../../lib/prisma.js';
 import { getSettings, resetSettingsCache, type BusinessSettings } from '../../lib/settings.js';
+import { loadWeights, WEIGHTS_SETTING } from '../recommendations/recommendations.service.js';
+import type { RecommendationWeights } from '../recommendations/scoring.js';
 import type { AdminActor, Page } from './admin-partners.service.js';
 
 export type DictionaryName = 'categories' | 'tags' | 'allergens' | 'cities';
@@ -212,4 +214,33 @@ export async function listAuditLog(
     })),
     meta: { page: filter.page, limit: filter.limit, total },
   };
+}
+
+export async function updateRecommendationWeights(
+  input: Partial<RecommendationWeights>,
+  actor: AdminActor,
+) {
+  const before = await loadWeights();
+  const after = { ...before, ...input };
+  await prisma.$transaction(async (tx) => {
+    await tx.setting.upsert({
+      where: { key: WEIGHTS_SETTING },
+      create: { key: WEIGHTS_SETTING, value: after, updatedBy: actor.id },
+      update: { value: after, updatedBy: actor.id },
+    });
+    await audit(
+      {
+        actorId: actor.id,
+        action: 'settings.update',
+        entityType: 'settings',
+        diff: jsonSafe({
+          before: { [WEIGHTS_SETTING]: before },
+          after: { [WEIGHTS_SETTING]: after },
+        }),
+        ip: actor.ip,
+      },
+      tx,
+    );
+  });
+  return after;
 }

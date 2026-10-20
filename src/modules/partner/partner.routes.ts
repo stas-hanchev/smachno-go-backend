@@ -16,6 +16,7 @@ import * as listings from './listings.service.js';
 import * as offers from './offers.service.js';
 import { onboardingRouter } from './onboarding.routes.js';
 import * as pickup from './pickup.service.js';
+import { uploadsRouter } from './uploads.routes.js';
 
 const member = requireVenueRole(['owner', 'staff'], { allowAdmin: true });
 const memberNoAdmin = requireVenueRole(['owner', 'staff']);
@@ -48,6 +49,7 @@ export const partnerRouter = Router();
 
 partnerRouter.use(requireAuth);
 partnerRouter.use(onboardingRouter);
+partnerRouter.use(uploadsRouter);
 
 partnerRouter.get('/venues', async (req, res) => {
   const memberships = await prisma.venueMember.findMany({

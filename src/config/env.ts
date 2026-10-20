@@ -28,6 +28,15 @@ export interface Env {
   LIQPAY_PRIVATE_KEY: string;
   LIQPAY_SANDBOX: boolean;
   RUN_JOBS_IN_PROCESS: boolean;
+  ALLOW_FAKE_PAYMENTS: boolean;
+  REDIS_URL: string;
+  CLOUDINARY_CLOUD_NAME: string;
+  CLOUDINARY_API_KEY: string;
+  CLOUDINARY_API_SECRET: string;
+  CLOUDINARY_FOLDER: string;
+  SENTRY_DSN: string;
+  SENTRY_ENVIRONMENT: string;
+  METRICS_TOKEN: string;
 }
 
 const schema = Joi.object({
@@ -73,6 +82,20 @@ const schema = Joi.object({
   LIQPAY_PRIVATE_KEY: Joi.string().allow('').default(''),
   LIQPAY_SANDBOX: Joi.boolean().default(false),
   RUN_JOBS_IN_PROCESS: Joi.boolean().default(true),
+  ALLOW_FAKE_PAYMENTS: Joi.boolean().default(false),
+  REDIS_URL: Joi.string()
+    .uri({ scheme: ['redis', 'rediss'] })
+    .allow('')
+    .default(''),
+  CLOUDINARY_CLOUD_NAME: Joi.string().allow('').default(''),
+  CLOUDINARY_API_KEY: Joi.string().allow('').default(''),
+  CLOUDINARY_API_SECRET: Joi.string().allow('').default(''),
+  CLOUDINARY_FOLDER: Joi.string()
+    .pattern(/^[\w-]+$/)
+    .default('smachnogo'),
+  SENTRY_DSN: Joi.string().uri().allow('').default(''),
+  SENTRY_ENVIRONMENT: Joi.string().allow('').default(''),
+  METRICS_TOKEN: Joi.string().min(16).allow('').default(''),
 }).unknown(true);
 
 function loadEnv(): Env {
@@ -82,8 +105,14 @@ function loadEnv(): Env {
     throw new Error(`Invalid environment configuration:\n${details}`);
   }
   const env = value as Env;
-  if (env.NODE_ENV === 'production' && env.PAYMENT_PROVIDER === 'fake') {
-    throw new Error('PAYMENT_PROVIDER=fake is not allowed in production');
+  if (
+    env.NODE_ENV === 'production' &&
+    env.PAYMENT_PROVIDER === 'fake' &&
+    !env.ALLOW_FAKE_PAYMENTS
+  ) {
+    throw new Error(
+      'PAYMENT_PROVIDER=fake is not allowed in production without ALLOW_FAKE_PAYMENTS=true',
+    );
   }
   if (env.PAYMENT_PROVIDER === 'liqpay' && (!env.LIQPAY_PUBLIC_KEY || !env.LIQPAY_PRIVATE_KEY)) {
     throw new Error('PAYMENT_PROVIDER=liqpay requires LIQPAY_PUBLIC_KEY and LIQPAY_PRIVATE_KEY');

@@ -35,6 +35,7 @@ Seed accounts (development only):
 | Script                                                     | What it does                                                              |
 | ---------------------------------------------------------- | ------------------------------------------------------------------------- |
 | `npm run dev`                                              | API with reload (tsx)                                                     |
+| `npm run dev:worker` / `npm run start:worker`              | Background jobs worker (needs `REDIS_URL` for the BullMQ queue)           |
 | `npm run build` / `npm start`                              | Generate the Prisma client, compile to `dist/`, run                       |
 | `npm run typecheck`, `npm run lint`, `npm run format`      | Checks                                                                    |
 | `npm test`                                                 | Unit tests; with `TEST_DATABASE_URL` set, also integration tests on MySQL |
@@ -146,8 +147,40 @@ Emails: payment and voucher, cancellation and refund, late payment refund, picku
 before the window, staff invite, application decision. Order emails respect `notification_settings`
 (`emailEnabled`, `orderUpdates`, `pickupReminders`); every notice is also stored in `notifications`.
 
-In-process jobs: `expirePendingOrders`, `closeListingSales` and `remindPickup` every minute, `markNoShow` and
-`reconcilePayments` every 5 minutes, `cleanupTokens` every 6 hours.
+Jobs: `expirePendingOrders`, `closeListingSales` and `remindPickup` every minute, `markNoShow` and
+`reconcilePayments` every 5 minutes, `recomputeRecommendations` every hour, `cleanupTokens` every 6 hours.
+
+Two modes:
+
+- Without Redis (`REDIS_URL` empty, `RUN_JOBS_IN_PROCESS=true`): the API runs the jobs on timers, as before.
+- With Redis (`REDIS_URL` set, `RUN_JOBS_IN_PROCESS=false`): `src/worker.ts` registers BullMQ job schedulers and
+  runs every job once per tick across all workers; it sends Socket.io events through the Redis emitter. The API
+  uses Redis for rate limits and the Socket.io adapter, so several API instances share limits and rooms.
+  Do not run both modes at once, or jobs run twice. Locally: `REDIS_URL=redis://localhost:6379`, then
+  `npm run dev` and `npm run dev:worker`.
+
+### Photos (Cloudinary)
+
+Owners upload images as `multipart/form-data` with one `file` field (JPEG, PNG or WebP, up to 5 MB; the
+signature is checked, not the extension): `POST|DELETE /partner/venues/:venueId/logo`, `/cover`,
+`POST /photos`, `DELETE /photos/:photoId` (up to 10), `POST|DELETE /offers/:offerId/photo`. Cloudinary limits
+images to 2000 px, the stored URL serves `f_auto,q_auto`, and a replaced image is deleted from Cloudinary.
+Without `CLOUDINARY_*` the routes answer 503.
+
+### Recommendations
+
+`GET /recommendations?lat&lng&radiusKm&limit` (up to 12) and `GET /recommendations/daily?lat&lng` score
+available listings by the TZ 8.12 formula, keep at most two listings per venue and personalise after three
+signals (view or stronger). `POST /interactions` takes `{ anonId?, events: [{ offerId, type: impression|view,
+source?, position? }] }` (up to 50; guests need a ULID `anonId`). Reserve, purchase, pickup and favorite events
+are written by the server. Weights: `GET/PUT /admin/settings/recommendations`.
+
+### Service endpoints
+
+`/health`, `/ready` (MySQL and Redis), `/metrics` (Prometheus, needs `Authorization: Bearer <METRICS_TOKEN>`,
+404 otherwise), `/api/v1/openapi.json` (generated from the Express routes and celebrate schemas, so request
+parameters and bodies match the validation; responses are not described yet). Errors with status 5xx and
+failed jobs go to Sentry when `SENTRY_DSN` is set.
 
 ## Decisions that differ from TZ 1.1
 
@@ -155,9 +188,7 @@ In-process jobs: `expirePendingOrders`, `closeListingSales` and `remindPickup` e
 - Coordinates are `lat`/`lng` DECIMAL with a B-tree index instead of `POINT SRID 4326` + SPATIAL INDEX:
   Prisma cannot create rows with a required `Unsupported("point")` column, and distances use plain
   haversine SQL so that any MySQL-compatible host works (deployment target is render.com).
-- Idempotency keys of `POST /orders` are stored in `orders.idempotency_key` until Redis is added.
-- Rate limits are in memory per process until Redis is added.
-- Background jobs run inside the API process (`RUN_JOBS_IN_PROCESS=true`) until the BullMQ worker is added.
+- Idempotency keys of `POST /orders` are stored in `orders.idempotency_key` instead of Redis: they stay with the order.
 - `PaymentProvider` enum has an extra `fake` value for development; `fake` is refused in production.
 - The reservation `UPDATE` sets `status` before `quantity_left`, because MySQL evaluates SET assignments left to right.
 - Staff invites are `auth_tokens` rows of type `staff_invite` (the inviter as `user_id`, the venue and email in `payload`),
@@ -165,16 +196,27 @@ In-process jobs: `expirePendingOrders`, `closeListingSales` and `remindPickup` e
 - An approved application creates a `draft` venue with the city center as coordinates unless the admin passes
   `lat`/`lng`; the owner corrects the address and coordinates in the profile before activation.
 - `orders.reminder_sent_at` was added so that the pickup reminder is sent once.
+- Photos are stored in Cloudinary instead of S3/MinIO and uploaded through the API (multer, signature check)
+  instead of `/uploads/presign`; Cloudinary resizes and re-encodes, so `sharp` is not used.
+- Rate limits and Socket.io use Redis only when `REDIS_URL` is set; without it they stay in memory per process.
+- Guests' interactions are kept under their `anonId` and are not merged into the account after sign-in.
+- A favorite venue is recorded as `favorite` interactions on its active offers (up to five), because
+  `interactions.offer_id` is required.
 
 ## Deployment (render.com)
 
-`render.yaml` is a draft Blueprint: build `npm ci --include=dev && npm run build`, pre-deploy
-`npx prisma migrate deploy`, health check `/health`. Render has no managed MySQL, so `DATABASE_URL`
-points to an external MySQL 8 or to a MySQL private service with a disk. Free instances sleep when idle,
-which pauses the in-process jobs. When the frontend is on another host, set `COOKIE_SAMESITE=none` and `COOKIE_SECURE=true`.
-Set `API_PUBLIC_URL` to the public URL of the service, because LiqPay sends callbacks and redirects there.
+`render.yaml` is a Blueprint with three services: `smachnogo-api` (web, pre-deploy `npx prisma migrate deploy`,
+health check `/health`), `smachnogo-worker` (background worker) and `smachnogo-redis` (Key Value). Shared
+variables live in the `smachnogo-shared` group. Render has no managed MySQL, so `DATABASE_URL` points to an
+external MySQL 8 or to a MySQL private service with a disk. When the frontend is on another host, keep
+`COOKIE_SAMESITE=none` and `COOKIE_SECURE=true`. Set `API_PUBLIC_URL` to the public URL of the service, because
+LiqPay sends callbacks and redirects there.
+
+The Blueprint runs payments on the test provider: `PAYMENT_PROVIDER=fake` is refused with
+`NODE_ENV=production` unless `ALLOW_FAKE_PAYMENTS=true`, which is meant for staging only. For LiqPay set
+`PAYMENT_PROVIDER=liqpay`, the keys and `ALLOW_FAKE_PAYMENTS=false`.
 
 ## Not done yet
 
-Redis (BullMQ worker, shared rate limits, Socket.io adapter), file uploads, reviews, recommendations
-and `/interactions`, OpenAPI docs, `/metrics`, Sentry, and stage 2 of the TZ.
+Response schemas in OpenAPI, scheduled listings (`generateListings`, FR021) and the rest of stage 2 of the TZ
+(reviews, analytics, gamification, web push, settlements).

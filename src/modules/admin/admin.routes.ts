@@ -18,6 +18,7 @@ import type { AdminActor, Page } from './admin-partners.service.js';
 import * as system from './admin-system.service.js';
 import type { DictionaryName } from './admin-system.service.js';
 import * as usersOrders from './admin-users-orders.service.js';
+import { loadWeights } from '../recommendations/recommendations.service.js';
 
 const actorOf = (req: Request): AdminActor => ({
   id: req.user!.id,
@@ -298,6 +299,33 @@ adminRouter.put(
   celebrate({ [Segments.BODY]: Joi.object(settingsSchema).min(1) }, celebrateOptions),
   async (req, res) => {
     res.json(await system.updateSettings(req.body, actorOf(req)));
+  },
+);
+
+const weightSchema = Joi.number().min(0).max(1);
+
+adminRouter.get('/settings/recommendations', async (_req, res) => {
+  res.json(await loadWeights());
+});
+
+adminRouter.put(
+  '/settings/recommendations',
+  celebrate(
+    {
+      [Segments.BODY]: Joi.object({
+        proximity: weightSchema,
+        preference: weightSchema,
+        popularity: weightSchema,
+        rating: weightSchema,
+        discount: weightSchema,
+        urgency: weightSchema,
+        favorite: weightSchema,
+      }).min(1),
+    },
+    celebrateOptions,
+  ),
+  async (req, res) => {
+    res.json(await system.updateRecommendationWeights(req.body, actorOf(req)));
   },
 );
 

@@ -1,10 +1,13 @@
 import type { Server as HttpServer } from 'node:http';
+import { createAdapter } from '@socket.io/redis-adapter';
 import { Server, type Socket } from 'socket.io';
 import { env } from '../config/env.js';
 import { AppError } from '../lib/errors.js';
 import { logger } from '../lib/logger.js';
+import { socketConnections } from '../lib/metrics.js';
 import { prisma } from '../lib/prisma.js';
 import { rooms, setRealtimeEmitter } from '../lib/realtime.js';
+import { createRedis, redisEnabled } from '../lib/redis.js';
 import { authenticateToken } from '../middleware/auth.js';
 
 interface SocketData {
@@ -95,6 +98,10 @@ export function attachRealtime(httpServer: HttpServer): Server {
     serveClient: false,
   });
 
+  if (redisEnabled) {
+    io.adapter(createAdapter(createRedis('socket-pub'), createRedis('socket-sub')));
+  }
+
   io.use(async (socket, next) => {
     const data = socket.data as SocketData;
     const token: unknown = socket.handshake.auth?.token;
@@ -109,7 +116,11 @@ export function attachRealtime(httpServer: HttpServer): Server {
     }
   });
 
-  io.on('connection', registerHandlers);
+  io.on('connection', (socket) => {
+    socketConnections.inc();
+    socket.on('disconnect', () => socketConnections.dec());
+    registerHandlers(socket);
+  });
 
   setRealtimeEmitter((room, event, payload) => {
     io.to(room).emit(event, payload);

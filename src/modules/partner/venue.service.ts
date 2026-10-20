@@ -9,6 +9,7 @@ const venueProfileInclude = {
   city: { select: { id: true, name: true } },
   hours: { orderBy: { weekday: 'asc' } },
   closures: { orderBy: { date: 'asc' } },
+  photos: { orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] },
 } satisfies Prisma.VenueInclude;
 
 type VenueProfile = Prisma.VenueGetPayload<{ include: typeof venueProfileInclude }>;
@@ -67,6 +68,7 @@ function toVenueProfileDto(venue: VenueProfile) {
     phone: venue.phone,
     logoUrl: venue.logoUrl,
     coverUrl: venue.coverUrl,
+    photos: venue.photos.map((p) => ({ id: Number(p.id), url: p.url, sortOrder: p.sortOrder })),
     legalName: venue.legalName,
     taxId: maskTail(decrypt(venue.taxId)),
     iban: maskTail(decrypt(venue.iban)),

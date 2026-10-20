@@ -110,6 +110,14 @@ function partnerRoutes(): PartnerRoute[] {
       body: { reason: 'Причина' },
       ownerOnly: true,
     },
+    { method: 'post', path: '/logo', ownerOnly: true },
+    { method: 'delete', path: '/logo', ownerOnly: true },
+    { method: 'post', path: '/cover', ownerOnly: true },
+    { method: 'delete', path: '/cover', ownerOnly: true },
+    { method: 'post', path: '/photos', ownerOnly: true },
+    { method: 'delete', path: '/photos/1', ownerOnly: true },
+    { method: 'post', path: '/offers/1/photo', ownerOnly: true },
+    { method: 'delete', path: '/offers/1/photo', ownerOnly: true },
   ];
 }
 
@@ -135,6 +143,24 @@ describe('partner access (TZ 12.2 #6)', () => {
     }
     const untouched = await prisma.venue.findUniqueOrThrow({ where: { id: a.venue.id } });
     expect(untouched.name).toBe('Заклад venue-a');
+  });
+
+  it('covers every venue route of the API', async () => {
+    const res = await request(app).get('/api/v1/openapi.json');
+    const prefix = '/api/v1/partner/venues/{venueId}';
+    const documented = Object.entries(res.body.paths as Record<string, object>)
+      .filter(([path]) => path === prefix || path.startsWith(`${prefix}/`))
+      .flatMap(([path, methods]) =>
+        Object.keys(methods).map((method) => `${method} ${path.slice(prefix.length)}`),
+      );
+    const tested = new Set(
+      partnerRoutes().map(
+        (r) =>
+          `${r.method} ${r.path.replace(/\/\d+(?=\/|$)/g, '/{id}').replace(ULID, '{publicId}')}`,
+      ),
+    );
+    const normalized = documented.map((d) => d.replace(/\{(?!publicId)\w+\}/g, '{id}'));
+    expect(normalized.filter((route) => !tested.has(route))).toEqual([]);
   });
 
   it('forbids owner-only routes for staff of the same venue', async () => {

@@ -3,6 +3,7 @@ import type { Payment, Prisma } from '../../generated/prisma/client.js';
 import { publishAfterCommit } from '../../lib/after-commit.js';
 import { notFound } from '../../lib/errors.js';
 import { logger } from '../../lib/logger.js';
+import { paymentResults } from '../../lib/metrics.js';
 import { Decimal } from '../../lib/money.js';
 import { prisma } from '../../lib/prisma.js';
 import { addMinutes } from '../../lib/time.js';
@@ -10,6 +11,7 @@ import { listingChanged, notifyOrderAfterCommit, orderChanged } from '../orders/
 import {
   issueVoucher,
   lockOrder,
+  recordPurchase,
   recordStatus,
   refundOrderPayment,
   reserveStock,
@@ -69,6 +71,7 @@ export async function processPaymentResult(result: PaymentResult): Promise<Payme
         await tx.order.update({ where: { id: order.id }, data: { status: 'paid' } });
         await recordStatus(tx, order.id, order.status, 'paid', actor);
         await issueVoucher(tx, order);
+        await recordPurchase(tx, order);
         orderChanged(after, order, order.status, 'paid');
         notifyOrderAfterCommit(after, order.id, { kind: 'paid' });
         return { outcome: 'paid' as const, orderId: order.id };
@@ -85,6 +88,7 @@ export async function processPaymentResult(result: PaymentResult): Promise<Payme
           'Late payment, stock reserved again',
         );
         await issueVoucher(tx, order);
+        await recordPurchase(tx, order);
         orderChanged(after, order, order.status, 'paid');
         listingChanged(after, order.listingId);
         notifyOrderAfterCommit(after, order.id, { kind: 'paid' });
@@ -121,6 +125,7 @@ export async function processPaymentResult(result: PaymentResult): Promise<Payme
         outcome.paymentId,
       );
     }
+    paymentResults.inc({ provider: env.PAYMENT_PROVIDER, outcome: outcome.outcome });
     logger.info(
       { providerOrderId: result.providerOrderId, outcome: outcome.outcome },
       'Payment result processed',

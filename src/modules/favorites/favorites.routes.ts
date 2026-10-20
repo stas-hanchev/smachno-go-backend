@@ -10,6 +10,8 @@ import { publicRating } from '../catalog/listing.dto.js';
 
 const venueParams = Joi.object({ venueId: id.required() });
 
+const FAVORITE_SIGNAL_OFFERS = 5;
+
 export const favoritesRouter = Router();
 
 favoritesRouter.use(requireAuth);
@@ -75,11 +77,31 @@ favoritesRouter.put(
     });
     if (!exists) throw notFound('Заклад не знайдено');
     const notify = req.body?.notifyNewListings as boolean | undefined;
+    const existed = await prisma.favorite.count({ where: { userId, venueId } });
     await prisma.favorite.upsert({
       where: { userId_venueId: { userId, venueId } },
       create: { userId, venueId, ...(notify !== undefined && { notifyNewListings: notify }) },
       update: notify !== undefined ? { notifyNewListings: notify } : {},
     });
+    if (!existed) {
+      const offers = await prisma.offer.findMany({
+        where: { venueId, status: 'active' },
+        select: { id: true },
+        orderBy: { updatedAt: 'desc' },
+        take: FAVORITE_SIGNAL_OFFERS,
+      });
+      if (offers.length) {
+        await prisma.interaction.createMany({
+          data: offers.map((o) => ({
+            userId,
+            offerId: o.id,
+            venueId,
+            type: 'favorite' as const,
+            source: 'favorite' as const,
+          })),
+        });
+      }
+    }
     res.status(204).end();
   },
 );

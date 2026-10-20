@@ -1,5 +1,4 @@
 import { publishAfterCommit } from '../lib/after-commit.js';
-import { logger } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
 import { getSettings } from '../lib/settings.js';
 import { addMinutes } from '../lib/time.js';
@@ -10,7 +9,6 @@ import {
   orderChanged,
   publishListingUpdate,
 } from '../modules/orders/order-events.js';
-import { reconcilePayments } from '../modules/payments/payments.service.js';
 
 const BATCH = 200;
 const REMINDER_LEAD_MIN = 30;
@@ -118,40 +116,4 @@ export async function cleanupTokens(now = new Date()): Promise<number> {
     }),
   ]);
   return refresh.count + oneTime.count;
-}
-
-interface Job {
-  name: string;
-  everyMs: number;
-  run: () => Promise<number>;
-}
-
-const JOBS: Job[] = [
-  { name: 'expirePendingOrders', everyMs: 60_000, run: () => expirePendingOrders() },
-  { name: 'closeListingSales', everyMs: 60_000, run: () => closeListingSales() },
-  { name: 'markNoShow', everyMs: 5 * 60_000, run: () => markNoShow() },
-  { name: 'remindPickup', everyMs: 60_000, run: () => remindPickup() },
-  { name: 'reconcilePayments', everyMs: 5 * 60_000, run: () => reconcilePayments() },
-  { name: 'cleanupTokens', everyMs: 6 * 3_600_000, run: () => cleanupTokens() },
-];
-
-export function startInProcessJobs(): () => void {
-  const timers = JOBS.map((job) => {
-    let running = false;
-    const tick = async () => {
-      if (running) return;
-      running = true;
-      try {
-        const count = await job.run();
-        if (count > 0) logger.info({ job: job.name, count }, 'Job processed records');
-      } catch (err) {
-        logger.error({ err, job: job.name }, 'Job failed');
-      } finally {
-        running = false;
-      }
-    };
-    void tick();
-    return setInterval(tick, job.everyMs);
-  });
-  return () => timers.forEach(clearInterval);
 }

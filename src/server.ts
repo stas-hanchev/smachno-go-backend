@@ -1,9 +1,13 @@
 import { createApp } from './app.js';
 import { env } from './config/env.js';
-import { startInProcessJobs } from './jobs/order-jobs.js';
+import { startInProcessJobs } from './jobs/registry.js';
 import { logger } from './lib/logger.js';
 import { prisma } from './lib/prisma.js';
+import { closeRedis } from './lib/redis.js';
+import { flushSentry, initSentry } from './lib/sentry.js';
 import { attachRealtime } from './realtime/socket.js';
+
+initSentry('api');
 
 const app = createApp();
 const server = app.listen(env.PORT, () => {
@@ -17,7 +21,7 @@ async function shutdown(signal: string) {
   logger.info({ signal }, 'Shutting down');
   stopJobs();
   void io.close(async () => {
-    await prisma.$disconnect();
+    await Promise.allSettled([prisma.$disconnect(), closeRedis(), flushSentry()]);
     process.exit(0);
   });
   setTimeout(() => process.exit(1), 10_000).unref();
