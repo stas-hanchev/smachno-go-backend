@@ -139,7 +139,7 @@ export async function approveApplication(
         tx,
       );
 
-      const link = `${env.APP_URL}/partner/venues/${venue.id}`;
+      const link = `${env.APP_URL}/partner/onboarding`;
       notifyAfterCommit(after, {
         userId: app.userId,
         type: 'application_approved',
