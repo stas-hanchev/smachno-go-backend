@@ -182,6 +182,12 @@ are written by the server. Weights: `GET/PUT /admin/settings/recommendations`.
 parameters and bodies match the validation; responses are not described yet). Errors with status 5xx and
 failed jobs go to Sentry when `SENTRY_DSN` is set.
 
+## CI
+
+`.github/workflows/ci.yml` runs on every push to `main` and on pull requests: lint, typecheck, Prettier and build in
+one job; unit and integration tests in another, against a MySQL 8.4 service (`prisma migrate reset` applies every
+migration to an empty database first).
+
 ## Decisions that differ from TZ 1.1
 
 - Two repositories (backend, frontend) instead of a pnpm monorepo. Shared types will come from an OpenAPI description.
