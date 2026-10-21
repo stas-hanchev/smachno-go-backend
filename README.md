@@ -209,18 +209,51 @@ migration to an empty database first).
 - A favorite venue is recorded as `favorite` interactions on its active offers (up to five), because
   `interactions.offer_id` is required.
 
-## Deployment (render.com)
+## Deployment (free tier)
 
-`render.yaml` is a Blueprint with three services: `smachnogo-api` (web, pre-deploy `npx prisma migrate deploy`,
-health check `/health`), `smachnogo-worker` (background worker) and `smachnogo-redis` (Key Value). Shared
-variables live in the `smachnogo-shared` group. Render has no managed MySQL, so `DATABASE_URL` points to an
-external MySQL 8 or to a MySQL private service with a disk. When the frontend is on another host, keep
-`COOKIE_SAMESITE=none` and `COOKIE_SECURE=true`. Set `API_PUBLIC_URL` to the public URL of the service, because
-LiqPay sends callbacks and redirects there.
+The free setup runs the frontend on Vercel, this API on a Render free web service and MySQL on Aiven (free plan).
+One API process runs the background jobs (`RUN_JOBS_IN_PROCESS=true`), so neither Redis nor a worker is needed.
 
-The Blueprint runs payments on the test provider: `PAYMENT_PROVIDER=fake` is refused with
-`NODE_ENV=production` unless `ALLOW_FAKE_PAYMENTS=true`, which is meant for staging only. For LiqPay set
-`PAYMENT_PROVIDER=liqpay`, the keys and `ALLOW_FAKE_PAYMENTS=false`.
+1. **Aiven:** create a free MySQL service. Copy its host, port, user and password into
+   `DATABASE_URL=mysql://avnadmin:<password>@<host>:<port>/defaultdb` (drop the `?ssl-mode=REQUIRED` suffix) and
+   download the CA certificate.
+2. **Render:** New → Blueprint, pick this repository. `render.yaml` creates `smachnogo-api` on the free plan. Fill in
+   the variables marked `sync: false`:
+   - `DATABASE_URL`; `DATABASE_SSL_CA` with the content of the Aiven CA certificate (multi-line, or one line with
+     `
+`);
+   - `DATA_ENCRYPTION_KEY`: `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`;
+   - `CORS_ORIGINS` and `APP_URL`: the frontend URL (`https://<app>.vercel.app`); `API_PUBLIC_URL`: the URL of
+     this service (`https://<api>.onrender.com`);
+   - `GOOGLE_CLIENT_ID`, SMTP (Brevo), Cloudinary and `SENTRY_DSN`.
+3. **Seed:** run once from a local checkout against the Aiven database. With `NODE_ENV=production` the seed creates
+   dictionaries, settings and the super admin only, so set a strong admin password:
+
+   ```bash
+   NODE_ENV=production DATABASE_URL=... DATABASE_SSL_CA="$(cat ca.pem)"      SEED_SUPER_ADMIN_EMAIL=... SEED_SUPER_ADMIN_PASSWORD=... npm run db:seed
+   ```
+
+4. **Keep-alive:** a free Render service sleeps after 15 minutes without requests, and the jobs (expiring
+   reservations, closing sales, no-show, reminders) stop with it. Point a free uptime monitor (cron-job.org,
+   UptimeRobot) at `https://<api>.onrender.com/health` every 5–10 minutes; one always-on service fits into the free
+   monthly hours.
+
+Migrations run on every start (`npx prisma migrate deploy && npm start`), because the free plan has no pre-deploy
+command. `BCRYPT_COST=10` keeps sign-in fast on the free CPU; existing hashes keep working.
+
+Database TLS: `DATABASE_SSL=true` enables TLS with certificate checks against the system CAs, and
+`DATABASE_SSL_CA` adds a provider CA (Aiven needs it). Both the API and the Prisma CLI (`prisma.config.ts` writes the
+CA to a temporary file for the schema engine) use these variables.
+
+### Paid setup
+
+`render.starter.yaml` describes the scaled setup: starter plans, a separate worker (`npm run start:worker`), Render
+Key Value as Redis and `npx prisma migrate deploy` as the pre-deploy command. Render reads `render.yaml`, so copy
+the file over it (or set the Blueprint path) when moving to paid plans.
+
+The Blueprints run payments on the test provider: `PAYMENT_PROVIDER=fake` is refused with `NODE_ENV=production`
+unless `ALLOW_FAKE_PAYMENTS=true`, which is meant for staging only. For LiqPay set `PAYMENT_PROVIDER=liqpay`, the
+keys, `ALLOW_FAKE_PAYMENTS=false` and `API_PUBLIC_URL`, because LiqPay sends callbacks there.
 
 ## Not done yet
 

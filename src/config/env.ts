@@ -8,6 +8,8 @@ export interface Env {
   APP_URL: string;
   API_PUBLIC_URL: string;
   DATABASE_URL: string;
+  DATABASE_SSL: boolean;
+  DATABASE_SSL_CA: string;
   DB_CONNECTION_LIMIT: number;
   JWT_ACCESS_SECRET: string;
   JWT_ACCESS_TTL_SEC: number;
@@ -56,6 +58,11 @@ const schema = Joi.object({
   DATABASE_URL: Joi.string()
     .uri({ scheme: ['mysql'] })
     .required(),
+  DATABASE_SSL: Joi.boolean().default(false),
+  DATABASE_SSL_CA: Joi.string()
+    .allow('')
+    .default('')
+    .custom((value: string) => value.replace(/\\n/g, '\n')),
   DB_CONNECTION_LIMIT: Joi.number().integer().min(1).default(10),
   JWT_ACCESS_SECRET: Joi.string().min(32).required(),
   JWT_ACCESS_TTL_SEC: Joi.number().integer().min(60).default(900),

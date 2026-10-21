@@ -2,7 +2,13 @@ import { PrismaMariaDb } from '@prisma/adapter-mariadb';
 import { env } from '../config/env.js';
 import { PrismaClient, type Prisma } from '../generated/prisma/client.js';
 
+function sslOptions() {
+  if (env.DATABASE_SSL_CA) return { ca: env.DATABASE_SSL_CA, rejectUnauthorized: true };
+  return env.DATABASE_SSL ? { rejectUnauthorized: true } : undefined;
+}
+
 function createAdapter(databaseUrl: string): PrismaMariaDb {
+  const ssl = sslOptions();
   const url = new URL(databaseUrl);
   return new PrismaMariaDb({
     host: url.hostname,
@@ -15,6 +21,7 @@ function createAdapter(databaseUrl: string): PrismaMariaDb {
     timezone: 'Z',
     connectTimeout: 5_000,
     acquireTimeout: 10_000,
+    ...(ssl && { ssl }),
   });
 }
 
